@@ -1,3 +1,13 @@
+# Instagram 下載器修復說明（1.18.1）
+
+## 1.18.1（同一支 PR，依已登入 Edge 的截圖再修）
+
+1.18.0 把按鈕插進書籤的父節點。那個節點是右側窄欄（會換行或直向排），所以開新分頁與下載排成一列、書籤被擠到下一列。1.18.1 改到真正的橫向動作列上，用一個 `inline-flex`、`flex-wrap: nowrap` 的集群包住「開新分頁、下載、書籤」，不改書籤原容器的寬度。圖示固定畫成 24×24、`stroke-width: 2`、`currentColor`，按鈕用 `content-box`，避免內距把圖示壓小。
+
+限時動態不再只看網址。首頁動態列點開的檢視器網址可能仍是 `/`。只要畫面上方有進度條、而且頂端有播放／更多按鈕，就當成故事檢視器。按鈕加在最右側「…」**後面**，同一橫列、不換行，這樣就不會被靜音鍵往左展開的音量滑桿蓋住，也不會壓到播放／暫停。`pushState`／`replaceState`／`popstate` 仍會重掃。
+
+下面是 1.18.0 的說明。
+
 # Instagram 下載器修復說明（1.18.0）
 
 適用環境：Microsoft Edge + Tampermonkey（開發人員模式已開啟），2026 年 11 月的 Instagram 網頁。此檔說明這份 fork（`hfming225/Instagram_Download_Button`）相對上游 `y252328/Instagram_Download_Button` 1.17.21 修了什麼。
@@ -74,7 +84,7 @@ Instagram 是單頁應用。限時動態網址是 `/stories/<使用者>/<媒體 
 2. 從 Chrome 線上應用程式商店安裝 Tampermonkey，並在 Edge 允許它在無痕以外的一般視窗執行。
 3. 點 Tampermonkey 圖示 → 管理面板。若已有「Instagram Download Button」且網址是 greasyfork.org，刪除或關閉它。
 4. 新增腳本，把本 repo 的 `instagram-dl.user.js` 全部貼上並儲存。或在腳本已合併進 `master` 之後，用上面的 raw 網址安裝。
-5. 打開腳本確認 `@version` 是 `1.18.0`，`@updateURL` 的主機是 `raw.githubusercontent.com/hfming225/...`。
+5. 打開腳本確認 `@version` 是 `1.18.1`，`@updateURL` 的主機是 `raw.githubusercontent.com/hfming225/...`。
 6. 重新整理 Instagram。貼文動作列應在書籤左側出現兩個 24px 筆畫圖示；打開限時動態或精選動態，header 控制列應出現同樣的兩個按鈕。
 7. 這份更新網址指到 **master**。Pull request 合併前，master 仍是舊檔，請先用本分支的檔案安裝，並先不要按 Tampermonkey 的「檢查更新」，以免被舊的 master 蓋回去。合併之後再讓它從 raw master 更新。
 

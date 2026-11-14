@@ -9,7 +9,7 @@
 // @name:hi             इंस्टाग्राम डाउनलोडर
 // @name:ru             Загрузчик Instagram
 // @namespace           https://github.com/hfming225/Instagram_Download_Button
-// @version             1.18.0
+// @version             1.18.1
 // @compatible          chrome
 // @description         Add the download button and the open button to download or open profile picture and media in the posts, stories, and highlights in Instagram
 // @description:zh-TW   在Instagram頁面加入下載按鈕與開啟按鈕，透過這些按鈕可以下載或開啟大頭貼與貼文、限時動態、Highlight中的照片或影片
@@ -131,7 +131,7 @@
         const found = [];
         const seen = new Set();
         const push = (btn) => {
-            if (!btn || seen.has(btn) || btn.closest('.custom-btn')) return;
+            if (!btn || seen.has(btn) || btn.closest('.custom-btn') || btn.closest('[data-igdl-story]') || btn.closest('.igdl-action-cluster')) return;
             seen.add(btn);
             found.push(btn);
         };
@@ -158,29 +158,24 @@
         return found;
     }
 
-    function templateMetrics(templateBtn) {
+    function templateMetrics(templateBtn, options) {
         const svg = templateBtn && templateBtn.querySelector('svg');
         const cs = templateBtn ? getComputedStyle(templateBtn) : null;
-        let padding = '8px';
-        if (cs && cs.padding && cs.padding !== '0px') padding = cs.padding;
-        else if (templateBtn && templateBtn.firstElementChild) {
-            const inner = getComputedStyle(templateBtn.firstElementChild);
-            if (inner.padding && inner.padding !== '0px') padding = inner.padding;
-        }
-        const heightPx = cs ? parseFloat(cs.height) : 0;
-        const height = (heightPx >= 24 && heightPx <= 64) ? (heightPx + 'px') : '40px';
+        const opt = options || {};
         let size = 24;
-        if (svg) {
-            const w = parseFloat(svg.getAttribute('width') || svg.getAttribute('height') || '24');
-            if (w >= 12 && w <= 32) size = w;
+        if (!opt.forceSize && svg) {
+            const rect = svg.getBoundingClientRect();
+            if (rect.width >= 20 && rect.width <= 28) size = Math.round(rect.width);
         }
-        let strokeWidth = '2';
-        if (svg) {
-            const stroked = svg.querySelector('[stroke-width]');
-            if (stroked && stroked.getAttribute('stroke-width')) strokeWidth = stroked.getAttribute('stroke-width');
+        if (opt.forceSize) size = opt.forceSize;
+        let pad = 8;
+        if (cs) {
+            const top = parseFloat(cs.paddingTop);
+            if (!isNaN(top) && top >= 0 && top <= 12) pad = top;
         }
-        const color = svg ? getComputedStyle(svg).color : (cs ? cs.color : 'currentColor');
-        return { padding, height, size, strokeWidth, color };
+        if (opt.padding != null) pad = opt.padding;
+        const color = opt.color || (svg ? getComputedStyle(svg).color : (cs ? cs.color : 'currentColor'));
+        return { padding: pad + 'px', size: size, strokeWidth: '2', color: color || 'currentColor' };
     }
 
     function buildIcon(kind, metrics) {
@@ -192,15 +187,17 @@
         svg.setAttribute('fill', 'none');
         svg.setAttribute('aria-hidden', 'true');
         svg.setAttribute('focusable', 'false');
+        svg.style.cssText = 'width:' + size + 'px;height:' + size + 'px;min-width:' + size + 'px;min-height:' + size + 'px;max-width:none;display:block;overflow:visible;flex:0 0 auto;';
+        // Glyphs span about the same box as the native bookmark (x 4–20, y 3–21).
         const paths = kind === 'download'
-            ? ['M12 4v10', 'M8 10l4 4 4-4', 'M5 20h14']
-            : ['M14 5h5v5', 'M19 5l-9 9', 'M10 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-4'];
+            ? ['M12 3.5v11', 'M7 11l5 5 5-5', 'M4.5 20.5h15']
+            : ['M14 4h6v6', 'M20 4L10 14', 'M10 5H6.2A1.2 1.2 0 0 0 5 6.2v11.6A1.2 1.2 0 0 0 6.2 19h11.6a1.2 1.2 0 0 0 1.2-1.2V14'];
         paths.forEach((d) => {
             const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
             path.setAttribute('d', d);
             path.setAttribute('fill', 'none');
             path.setAttribute('stroke', 'currentColor');
-            path.setAttribute('stroke-width', metrics.strokeWidth || '2');
+            path.setAttribute('stroke-width', '2');
             path.setAttribute('stroke-linecap', 'round');
             path.setAttribute('stroke-linejoin', 'round');
             svg.appendChild(path);
@@ -208,8 +205,8 @@
         return svg;
     }
 
-    function createCustomBtn(kind, templateBtn) {
-        const metrics = templateMetrics(templateBtn);
+    function createCustomBtn(kind, templateBtn, options) {
+        const metrics = templateMetrics(templateBtn, options);
         const btn = document.createElement('div');
         btn.className = 'custom-btn ' + (kind === 'download' ? 'download-btn' : 'newtab-btn');
         btn.setAttribute('role', 'button');
@@ -223,7 +220,7 @@
             'justify-content:center',
             'align-self:center',
             'flex:0 0 auto',
-            'box-sizing:border-box',
+            'box-sizing:content-box',
             'margin:0',
             'border:0',
             'background:transparent',
@@ -233,8 +230,10 @@
             'z-index:2',
             'color:' + (metrics.color || 'currentColor'),
             'padding:' + metrics.padding,
-            'height:' + metrics.height,
-            'min-width:' + metrics.height
+            'width:' + metrics.size + 'px',
+            'height:' + metrics.size + 'px',
+            'min-width:' + metrics.size + 'px',
+            'min-height:' + metrics.size + 'px'
         ].join(';');
         btn.appendChild(buildIcon(kind, metrics));
         btn.addEventListener('click', onClickHandler);
@@ -242,8 +241,8 @@
         return btn;
     }
 
-    function pairButtons(templateBtn) {
-        return [createCustomBtn('newtab', templateBtn), createCustomBtn('download', templateBtn)];
+    function pairButtons(templateBtn, options) {
+        return [createCustomBtn('newtab', templateBtn, options), createCustomBtn('download', templateBtn, options)];
     }
 
     function attachPrefetch(buttons) {
@@ -251,67 +250,131 @@
         buttons.forEach((btn) => onMouseInHandler({ currentTarget: btn }));
     }
 
+    function isRowFlex(el) {
+        if (!el) return false;
+        const cs = getComputedStyle(el);
+        const display = cs.display;
+        if (display !== 'flex' && display !== 'inline-flex') return false;
+        return cs.flexDirection === 'row' || cs.flexDirection === 'row-reverse';
+    }
+
+    function findHorizontalActionRow(saveBtn) {
+        let node = saveBtn.parentElement;
+        let fallback = null;
+        for (let depth = 0; node && depth < 8; depth++, node = node.parentElement) {
+            if (node === document.body || node === document.documentElement) break;
+            const buttons = [...node.querySelectorAll('button, [role="button"]')].filter((btn) => {
+                return btn.querySelector('svg') && !btn.closest('.custom-btn') && !btn.closest('.igdl-action-cluster');
+            });
+            const hasCount = buttons.some((btn) => /\d/.test((btn.innerText || '').trim()));
+            if (hasCount && buttons.length >= 3) {
+                if (isRowFlex(node)) return node;
+                fallback = fallback || node;
+            }
+        }
+        return fallback || saveBtn.parentElement;
+    }
+
     function injectBeforeSave(saveBtn) {
-        const parent = saveBtn.parentElement;
-        if (!parent) return;
-        if ([...parent.children].some((el) => el.classList && el.classList.contains('custom-btn'))) return;
-        const [newtabBtn, downloadBtn] = pairButtons(saveBtn);
-        parent.insertBefore(newtabBtn, saveBtn);
-        parent.insertBefore(downloadBtn, saveBtn);
+        if (!saveBtn || saveBtn.closest('.igdl-action-cluster') || saveBtn.closest('[data-igdl-story]')) return;
+        const row = findHorizontalActionRow(saveBtn);
+        if (!row) return;
+        let slot = saveBtn;
+        while (slot.parentElement && slot.parentElement !== row) slot = slot.parentElement;
+        const cluster = document.createElement('div');
+        cluster.className = 'igdl-action-cluster';
+        cluster.style.cssText = 'display:inline-flex;flex-flow:row nowrap;align-items:center;justify-content:flex-end;width:max-content;max-width:none;flex:0 0 auto;align-self:center;margin:0;';
+        row.insertBefore(cluster, slot);
+        const [newtabBtn, downloadBtn] = pairButtons(saveBtn, { forceSize: 24 });
+        cluster.append(newtabBtn, downloadBtn, saveBtn);
+        if (slot !== saveBtn && slot.childElementCount === 0) slot.remove();
         attachPrefetch([newtabBtn, downloadBtn]);
     }
 
-    function storyControlLabel(el) {
-        const svg = el.querySelector && el.querySelector('svg');
-        return ((el.getAttribute && el.getAttribute('aria-label')) || '') + ' ' + iconLabel(svg);
+    function looksLikeProgressRow(el) {
+        const kids = [...el.children].filter((kid) => !kid.classList.contains('igdl-story-tools') && !kid.classList.contains('custom-btn'));
+        if (kids.length < 1 || kids.length > 40) return false;
+        const rects = kids.map((kid) => kid.getBoundingClientRect());
+        if (rects.some((rect) => rect.width < 16 || rect.height < 1.5 || rect.height > 8)) return false;
+        const parent = el.getBoundingClientRect();
+        if (parent.width < 140) return false;
+        const sum = rects.reduce((total, rect) => total + rect.width, 0);
+        return sum >= parent.width * 0.6;
     }
 
-    function findStoryControlGroup() {
-        const labelRe = /play|pause|mute|unmute|audio|menu|more|暫停|播放|靜音|音訊|更多|選單|关闭|關閉/i;
-        const buttons = [...document.querySelectorAll('header button, header [role="button"], section button, section [role="button"], [role="dialog"] button, [role="dialog"] [role="button"]')];
-        const matched = buttons.filter((el) => !el.closest('.custom-btn') && !el.closest('.igdl-story-fallback') && labelRe.test(storyControlLabel(el)));
-        const pool = matched.length ? matched : buttons.filter((el) => {
-            return el.closest('header') && el.querySelector('svg') && !el.closest('.custom-btn') && !el.closest('.igdl-story-fallback');
+    function headerControls(viewer) {
+        const bounds = viewer.getBoundingClientRect();
+        return [...viewer.querySelectorAll('button, [role="button"]')].filter((btn) => {
+            if (btn.closest('.custom-btn, .igdl-story-tools')) return false;
+            if (!btn.querySelector('svg')) return false;
+            const rect = btn.getBoundingClientRect();
+            if (rect.width < 8 || rect.height < 8 || rect.width > 72 || rect.height > 72) return false;
+            return rect.top >= bounds.top - 2 && rect.top < bounds.top + 96;
         });
-        if (!pool.length) return null;
-        const counts = new Map();
-        pool.forEach((el) => {
-            const parent = el.parentElement;
-            if (!parent || parent === document.body) return;
-            counts.set(parent, (counts.get(parent) || 0) + 1);
-        });
-        let best = null;
-        let bestN = 0;
-        counts.forEach((n, parent) => {
-            if (n > bestN) {
-                best = parent;
-                bestN = n;
+    }
+
+    function findStoryViewers() {
+        const viewers = [];
+        const seen = new Set();
+        const nodes = document.querySelectorAll('div');
+        for (let i = 0; i < nodes.length; i++) {
+            const row = nodes[i];
+            if (row.childElementCount < 1 || row.childElementCount > 40) continue;
+            if (row.closest('.custom-btn, .igdl-story-tools')) continue;
+            if (!looksLikeProgressRow(row)) continue;
+            const rowTop = row.getBoundingClientRect().top;
+            let node = row.parentElement;
+            for (let depth = 0; node && depth < 10 && node !== document.body; depth++, node = node.parentElement) {
+                const rect = node.getBoundingClientRect();
+                if (rect.height < 280 || rect.width < 180) continue;
+                if (rowTop - rect.top > 48) continue;
+                if (!headerControls(node).length) continue;
+                if (!seen.has(node)) {
+                    seen.add(node);
+                    viewers.push(node);
+                }
+                break;
             }
-        });
-        return best;
+        }
+        return viewers;
     }
 
-    function injectStoryButtons(group) {
-        if (!group || group.querySelector(':scope > .custom-btn')) return;
-        const anchor = [...group.children].find((el) => el.matches && el.matches('button, [role="button"]') && !el.classList.contains('custom-btn'));
-        const template = anchor || group.querySelector('button, [role="button"]');
-        const [newtabBtn, downloadBtn] = pairButtons(template);
-        if (anchor) {
-            group.insertBefore(newtabBtn, anchor);
-            group.insertBefore(downloadBtn, anchor);
-        } else {
-            group.append(newtabBtn, downloadBtn);
+    function injectStoryIntoViewer(viewer) {
+        if (!viewer || viewer.querySelector('.igdl-story-tools')) {
+            if (viewer) viewer.setAttribute('data-igdl-story', '1');
+            return;
         }
+        const controls = headerControls(viewer);
+        if (!controls.length) return;
+        controls.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+        const menu = controls[controls.length - 1];
+        const parent = menu.parentElement;
+        if (!parent) return;
+        const parentStyle = getComputedStyle(parent);
+        if (parentStyle.display === 'flex' || parentStyle.display === 'inline-flex') {
+            if (parentStyle.flexDirection === 'column') parent.style.flexDirection = 'row';
+            if (parentStyle.flexWrap === 'wrap') parent.style.flexWrap = 'nowrap';
+            parent.style.alignItems = 'center';
+        }
+        viewer.setAttribute('data-igdl-story', '1');
+        const tools = document.createElement('span');
+        tools.className = 'igdl-story-tools';
+        tools.style.cssText = 'display:inline-flex;flex-flow:row nowrap;align-items:center;flex:0 0 auto;margin-left:12px;color:#fff;position:relative;z-index:6;';
+        const [newtabBtn, downloadBtn] = pairButtons(menu, { forceSize: 24, color: '#fff', padding: 8 });
+        newtabBtn.style.color = '#fff';
+        downloadBtn.style.color = '#fff';
+        tools.append(newtabBtn, downloadBtn);
+        menu.insertAdjacentElement('afterend', tools);
         attachPrefetch([newtabBtn, downloadBtn]);
     }
 
     function injectStoryFallback() {
-        if (document.querySelector('.custom-btn')) return;
-        if (document.querySelector('.igdl-story-fallback')) return;
+        if (document.querySelector('.igdl-story-tools, .igdl-story-fallback')) return;
         const bar = document.createElement('div');
         bar.className = 'igdl-story-fallback';
-        bar.style.cssText = 'position:fixed;top:12px;right:64px;z-index:100000;display:flex;align-items:center;color:#fff;';
-        const [newtabBtn, downloadBtn] = pairButtons(null);
+        bar.setAttribute('data-igdl-story', '1');
+        bar.style.cssText = 'position:fixed;top:56px;right:16px;z-index:100000;display:flex;flex-flow:row nowrap;align-items:center;color:#fff;background:rgba(0,0,0,0.45);border-radius:8px;';
+        const [newtabBtn, downloadBtn] = pairButtons(null, { forceSize: 24, color: '#fff', padding: 8 });
         newtabBtn.style.color = '#fff';
         downloadBtn.style.color = '#fff';
         bar.append(newtabBtn, downloadBtn);
@@ -320,32 +383,41 @@
     }
 
     let storyMisses = 0;
+    function clearInjected() {
+        document.querySelectorAll('.igdl-action-cluster').forEach((cluster) => {
+            const save = [...cluster.children].find((el) => !el.classList.contains('custom-btn'));
+            if (save && cluster.parentElement) cluster.parentElement.insertBefore(save, cluster);
+            cluster.remove();
+        });
+        document.querySelectorAll('.custom-btn, .igdl-story-fallback, .igdl-story-tools').forEach((node) => node.remove());
+        document.querySelectorAll('[data-igdl-story]').forEach((node) => node.removeAttribute('data-igdl-story'));
+    }
+
     function scanUi() {
         if (!document.body) return;
         const curUrl = location.href;
         if (preUrl !== curUrl) {
-            document.querySelectorAll('.custom-btn, .igdl-story-fallback').forEach((node) => node.remove());
+            clearInjected();
             storyUrlCache.clear();
             storyMisses = 0;
             preUrl = curUrl;
         }
 
-        if (location.pathname.indexOf('/stories/') !== -1) {
-            const group = findStoryControlGroup();
-            if (group) {
-                document.querySelectorAll('.igdl-story-fallback').forEach((node) => node.remove());
-                storyMisses = 0;
-                injectStoryButtons(group);
-            } else if (!document.querySelector('.custom-btn')) {
-                storyMisses += 1;
-                if (storyMisses >= 4) injectStoryFallback();
-            }
-            return;
+        const viewers = findStoryViewers();
+        viewers.forEach(injectStoryIntoViewer);
+        const storyPage = location.pathname.indexOf('/stories/') !== -1;
+        if (viewers.length) {
+            document.querySelectorAll('.igdl-story-fallback').forEach((node) => node.remove());
+            storyMisses = 0;
+        } else if (storyPage) {
+            storyMisses += 1;
+            if (storyMisses >= 4) injectStoryFallback();
         }
+        if (storyPage) return;
 
         findSaveButtons(document).forEach(injectBeforeSave);
 
-        if (!location.pathname.includes('stor') && document.querySelector('header section svg circle')) {
+        if (!storyPage && document.querySelector('header section svg circle')) {
             const header = document.querySelector('header');
             if (header && !header.querySelector('.custom-btn') && document.getElementsByClassName('custom-btn').length === 0) {
                 addCustomBtn(document.querySelector('header section svg circle'), 'inherit', append2Header);
@@ -449,9 +521,9 @@
         let target = e.currentTarget;
         e.stopPropagation();
         e.preventDefault();
-        if (window.location.pathname.includes('stories')) {
+        if (window.location.pathname.includes('stories') || (target.closest && target.closest('[data-igdl-story], .igdl-story-tools, .igdl-story-fallback'))) {
             storyOnClicked(target);
-        } else if (document.querySelector('header') && document.querySelector('header').contains(target)) {
+        } else if (document.querySelector('header') && document.querySelector('header').contains(target) && !(target.closest && target.closest('[data-igdl-story]'))) {
             profileOnClicked(target);
         } else {
             postOnClicked(target);
@@ -461,9 +533,9 @@
     function onMouseInHandler(e) {
         let target = e.currentTarget;
         if (!prefetchAndAttachLink && !hoverToFetchAndAttachLink) return;
-        if (window.location.pathname.includes('stories')) {
+        if (window.location.pathname.includes('stories') || (target.closest && target.closest('[data-igdl-story], .igdl-story-tools, .igdl-story-fallback'))) {
             storyOnMouseIn(target);
-        } else if (document.querySelector('header') && document.querySelector('header').contains(target)) {
+        } else if (document.querySelector('header') && document.querySelector('header').contains(target) && !(target.closest && target.closest('[data-igdl-story]'))) {
             profileOnMouseIn(target);
         } else {
             postOnMouseIn(target);
@@ -845,6 +917,10 @@
                     const match = window.location.pathname.match(/\/stories\/([^/]+)/);
                     if (match) posterName = match[1];
                 }
+                if (!posterName || posterName === 'unknown' || posterName === 'highlights') {
+                    const identity = storyIdentityFromRoot(sectionNode);
+                    if (identity && identity.username) posterName = identity.username;
+                }
                 const filename = filenameFormat(storyFilenameTemplate, posterName, datetime, mediaName);
                 downloadResource(url, filename);
             } else {
@@ -856,12 +932,14 @@
     }
 
     function storyGetSectionNode(target) {
+        const marked = target && target.closest && target.closest('[data-igdl-story]');
+        if (marked) return marked;
         let sectionNode = target;
         while (sectionNode && sectionNode.tagName !== 'SECTION') {
             sectionNode = sectionNode.parentNode;
         }
         if (sectionNode) return sectionNode;
-        return document.querySelector('[role="dialog"]') || document.querySelector('section');
+        return document.querySelector('[data-igdl-story]') || document.querySelector('[role="dialog"]') || document.querySelector('section');
     }
 
     let cachedAppId = null;
@@ -933,27 +1011,41 @@
         return null;
     }
 
-    function storyProgressIndex() {
-        const header = document.querySelector('section header, [role="dialog"] header');
-        if (!header) return 0;
-        const divs = header.querySelectorAll('div');
+    function storyProgressIndex(root) {
+        const scope = root || document.querySelector('[data-igdl-story]') || document;
+        const divs = scope.querySelectorAll ? scope.querySelectorAll('div') : [];
         for (let i = 0; i < divs.length; i++) {
+            if (!looksLikeProgressRow(divs[i])) continue;
             const kids = [...divs[i].children];
-            if (kids.length < 2 || kids.length > 40) continue;
-            const widths = kids.map((kid) => kid.getBoundingClientRect().width);
-            if (!widths.length || widths.some((w) => w < 2)) continue;
-            const same = widths.every((w) => Math.abs(w - widths[0]) < 4);
-            if (!same) continue;
             for (let k = 0; k < kids.length; k++) {
                 const fill = kids[k].firstElementChild;
-                if (!fill) return k;
                 const parentW = kids[k].getBoundingClientRect().width || 1;
-                const fillW = fill.getBoundingClientRect().width;
-                if (fillW < parentW - 1) return k;
+                const fillW = fill ? fill.getBoundingClientRect().width : 0;
+                if (!fill || fillW < parentW - 1) return k;
             }
-            return kids.length - 1;
+            return Math.max(0, kids.length - 1);
         }
         return 0;
+    }
+
+    function storyIdentityFromRoot(root) {
+        if (!root || !root.querySelectorAll) return null;
+        const links = root.querySelectorAll('a[href]');
+        for (let i = 0; i < links.length; i++) {
+            const href = links[i].getAttribute('href') || '';
+            const story = href.match(/^\/stories\/([^/]+)\/(\d+)/);
+            if (story && story[1] !== 'highlights') return { username: story[1], mediaId: story[2] };
+            const highlight = href.match(/^\/stories\/highlights\/([^/]+)/);
+            if (highlight) return { highlightId: highlight[1] };
+        }
+        for (let i = 0; i < links.length; i++) {
+            const href = links[i].getAttribute('href') || '';
+            const user = href.match(/^\/([A-Za-z0-9._]+)\/?$/);
+            if (user && !/^(explore|reels|direct|accounts|stories|p)$/.test(user[1])) {
+                return { username: user[1], mediaId: null };
+            }
+        }
+        return null;
     }
 
     const userIdCache = {};
@@ -981,30 +1073,34 @@
     }
 
     const storyUrlCache = new Map();
-    async function fetchCurrentStoryUrl() {
-        const cacheKey = location.pathname + '|' + storyProgressIndex();
+    async function fetchCurrentStoryUrl(root) {
+        const viewer = root || document.querySelector('[data-igdl-story]');
+        const fromDom = storyIdentityFromRoot(viewer);
+        const index = storyProgressIndex(viewer);
+        const cacheKey = location.pathname + '|' + index + '|' + (fromDom ? (fromDom.mediaId || fromDom.highlightId || fromDom.username || '') : '');
         if (storyUrlCache.has(cacheKey)) return storyUrlCache.get(cacheKey);
 
         const userStory = location.pathname.match(/^\/stories\/([^/]+)\/(\d+)\/?/);
         const highlight = location.pathname.match(/^\/stories\/highlights\/([^/]+)\/?/);
         const userOnly = location.pathname.match(/^\/stories\/([^/]+)\/?$/);
         let url = null;
+        const mediaFromPath = userStory && userStory[1] !== 'highlights' ? userStory[2] : (fromDom && fromDom.mediaId);
+        const userFromPath = userStory && userStory[1] !== 'highlights' ? userStory[1] : (userOnly && userOnly[1] !== 'highlights' ? userOnly[1] : (fromDom && fromDom.username));
 
-        if (userStory && userStory[1] !== 'highlights') {
-            const info = await igFetchJson('https://www.instagram.com/api/v1/media/' + userStory[2] + '/info/');
+        if (mediaFromPath) {
+            const info = await igFetchJson('https://www.instagram.com/api/v1/media/' + mediaFromPath + '/info/');
             url = info && info.items && info.items[0] ? bestItemUrl(info.items[0]) : null;
         }
 
         if (!url) {
             let reelId = null;
-            let mediaId = null;
+            let mediaId = mediaFromPath || null;
             if (highlight) {
                 reelId = 'highlight:' + highlight[1];
-            } else if (userStory && userStory[1] !== 'highlights') {
-                mediaId = userStory[2];
-                reelId = await usernameToId(userStory[1]);
-            } else if (userOnly && userOnly[1] !== 'highlights') {
-                reelId = await usernameToId(userOnly[1]);
+            } else if (fromDom && fromDom.highlightId) {
+                reelId = 'highlight:' + fromDom.highlightId;
+            } else if (userFromPath) {
+                reelId = await usernameToId(userFromPath);
             }
             if (reelId) {
                 const loggedIn = /(?:^|;\s*)sessionid=/.test(document.cookie);
@@ -1056,7 +1152,7 @@
     async function storyGetUrl(target, sectionNode) {
         let url = null;
         if (!disableNewUrlFetchMethod) {
-            url = await fetchCurrentStoryUrl();
+            url = await fetchCurrentStoryUrl(sectionNode);
             if (!url) url = await getUrlFromInfoApi(target);
         }
         if (url && !String(url).startsWith('blob:')) return url;
