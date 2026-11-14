@@ -8,8 +8,8 @@
 // @name:fr             Téléchargeur Instagram
 // @name:hi             इंस्टाग्राम डाउनलोडर
 // @name:ru             Загрузчик Instagram
-// @namespace           https://github.com/y252328/Instagram_Download_Button
-// @version             1.17.21
+// @namespace           https://github.com/hfming225/Instagram_Download_Button
+// @version             1.18.0
 // @compatible          chrome
 // @description         Add the download button and the open button to download or open profile picture and media in the posts, stories, and highlights in Instagram
 // @description:zh-TW   在Instagram頁面加入下載按鈕與開啟按鈕，透過這些按鈕可以下載或開啟大頭貼與貼文、限時動態、Highlight中的照片或影片
@@ -23,15 +23,32 @@
 // @author              ZhiYu
 // @match               https://www.instagram.com/*
 // @icon                https://www.google.com/s2/favicons?sz=64&domain=instagram.com
-// @grant               none
+// @run-at              document-idle
+// @grant               GM_xmlhttpRequest
+// @grant               unsafeWindow
+// @connect             www.instagram.com
+// @connect             i.instagram.com
+// @connect             *.instagram.com
+// @connect             *.cdninstagram.com
+// @connect             *.fbcdn.net
+// @updateURL           https://raw.githubusercontent.com/hfming225/Instagram_Download_Button/master/instagram-dl.user.js
+// @downloadURL         https://raw.githubusercontent.com/hfming225/Instagram_Download_Button/master/instagram-dl.user.js
+// @homepageURL         https://github.com/hfming225/Instagram_Download_Button
 // @license             MIT
 // ==/UserScript==
 
-// TO-DO:
-//   - replace the checking timer with the observer
+// Injection uses a MutationObserver. A 1s timer remains as a backup for SPA route changes.
 
 (function () {
     'use strict';
+
+    // Page-context fetch so cookies and same-origin /api calls keep working
+    // when Tampermonkey runs the script outside the page world (@grant not none).
+    function pageFetch(input, init) {
+        const page = (typeof unsafeWindow !== 'undefined' && unsafeWindow && unsafeWindow.fetch) ? unsafeWindow : window;
+        return page.fetch.call(page, input, init);
+    }
+
 
     // =================
     // =    Options    =
@@ -62,26 +79,332 @@
     const postIdPattern = /^\/p\/([^/]+)\//;
     const postUrlPattern = /instagram\.com\/p\/[\w-]+\//;
 
-    var svgDownloadBtn = `<svg version="1.1" id="Capa_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" height="24" width="24"
-     viewBox="0 0 477.867 477.867" style="fill:%color;" xml:space="preserve">
-    <g>
-        <path d="M443.733,307.2c-9.426,0-17.067,7.641-17.067,17.067v102.4c0,9.426-7.641,17.067-17.067,17.067H68.267
-            c-9.426,0-17.067-7.641-17.067-17.067v-102.4c0-9.426-7.641-17.067-17.067-17.067s-17.067,7.641-17.067,17.067v102.4
-            c0,28.277,22.923,51.2,51.2,51.2H409.6c28.277,0,51.2-22.923,51.2-51.2v-102.4C460.8,314.841,453.159,307.2,443.733,307.2z"/>
-    </g>
-    <g>
-        <path d="M335.947,295.134c-6.614-6.387-17.099-6.387-23.712,0L256,351.334V17.067C256,7.641,248.359,0,238.933,0
-            s-17.067,7.641-17.067,17.067v334.268l-56.201-56.201c-6.78-6.548-17.584-6.36-24.132,0.419c-6.388,6.614-6.388,17.099,0,23.713
-            l85.333,85.333c6.657,6.673,17.463,6.687,24.136,0.031c0.01-0.01,0.02-0.02,0.031-0.031l85.333-85.333
-            C342.915,312.486,342.727,301.682,335.947,295.134z"/>
-    </g>
-</svg>`;
+    const WEB_APP_ID = '936619743392459';
+    const SAVE_ICON_SELECTORS = [
+        'polygon[points="20 21 12 13.44 4 21 4 3 20 3 20 21"]',
+        'path[d="M20 22a.999.999 0 0 1-.687-.273L12 14.815l-7.313 6.912A1 1 0 0 1 3 21V3a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1Z"]'
+    ];
+    const SAVE_LABEL = /^(save|saved|unsave|remove|收藏|取消收藏|儲存|已儲存|保存|取消保存|移除)$/i;
 
-    var svgNewtabBtn = `<svg id="Capa_1" style="fill:%color;" viewBox="0 0 482.239 482.239" xmlns="http://www.w3.org/2000/svg" height="24" width="24">
-    <path d="m465.016 0h-344.456c-9.52 0-17.223 7.703-17.223 17.223v86.114h-86.114c-9.52 0-17.223 7.703-17.223 17.223v344.456c0 9.52 7.703 17.223 17.223 17.223h344.456c9.52 0 17.223-7.703 17.223-17.223v-86.114h86.114c9.52 0 17.223-7.703 17.223-17.223v-344.456c0-9.52-7.703-17.223-17.223-17.223zm-120.56 447.793h-310.01v-310.01h310.011v310.01zm103.337-103.337h-68.891v-223.896c0-9.52-7.703-17.223-17.223-17.223h-223.896v-68.891h310.011v310.01z"/>
-</svg>`;
+    function clickCarouselControl(direction) {
+        const legacyClass = direction === 'next' ? '_9zm2' : '_9zm0';
+        const legacy = document.getElementsByClassName(legacyClass);
+        if (legacy.length > 0) {
+            legacy[0].click();
+            return;
+        }
+        const labelRe = direction === 'next'
+            ? /^(next|go forward|下一張|下一個|下一步)$/i
+            : /^(previous|go back|back|上一張|上一個|上一步)$/i;
+        const buttons = document.querySelectorAll('button, [role="button"]');
+        for (let i = 0; i < buttons.length; i++) {
+            const el = buttons[i];
+            const label = (el.getAttribute('aria-label') || '') + ' ' + ((el.querySelector('svg') && el.querySelector('svg').getAttribute('aria-label')) || '');
+            if (labelRe.test(label.trim())) {
+                el.click();
+                return;
+            }
+        }
+    }
 
-    var preUrl = "";
+    function iconLabel(svg) {
+        if (!svg) return '';
+        const own = svg.getAttribute('aria-label') || '';
+        const title = svg.querySelector('title');
+        return (own + ' ' + (title ? title.textContent : '')).trim();
+    }
+
+    function isSaveIcon(svg) {
+        if (!svg || svg.closest('.custom-btn')) return false;
+        if (SAVE_LABEL.test(iconLabel(svg))) return true;
+        for (let i = 0; i < SAVE_ICON_SELECTORS.length; i++) {
+            if (svg.querySelector(SAVE_ICON_SELECTORS[i]) || (svg.matches && svg.matches(SAVE_ICON_SELECTORS[i]))) return true;
+        }
+        return false;
+    }
+
+    function closestControl(node) {
+        return node && node.closest ? node.closest('button, [role="button"]') : null;
+    }
+
+    function findSaveButtons(root) {
+        const found = [];
+        const seen = new Set();
+        const push = (btn) => {
+            if (!btn || seen.has(btn) || btn.closest('.custom-btn')) return;
+            seen.add(btn);
+            found.push(btn);
+        };
+        root.querySelectorAll('svg').forEach((svg) => {
+            if (isSaveIcon(svg)) push(closestControl(svg));
+        });
+
+        // Action row with counts (like / comment / repost / share) and an icon-only bookmark on the right.
+        // Runs per post so a recognized bookmark on one article does not skip the others.
+        const scopes = root.querySelectorAll('article, main, [role="dialog"]');
+        scopes.forEach((scope) => {
+            if ([...seen].some((btn) => scope.contains(btn))) return;
+            const buttons = [...scope.querySelectorAll('button, [role="button"]')].filter((btn) => {
+                return btn.querySelector('svg') && !btn.closest('.custom-btn');
+            });
+            if (buttons.length < 3) return;
+            const withCount = buttons.filter((btn) => /\d/.test((btn.innerText || '').trim()) && (btn.innerText || '').trim().length < 16);
+            if (!withCount.length) return;
+            const iconOnly = buttons.filter((btn) => !/\d/.test((btn.innerText || '').trim()));
+            if (!iconOnly.length) return;
+            iconOnly.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+            push(iconOnly[iconOnly.length - 1]);
+        });
+        return found;
+    }
+
+    function templateMetrics(templateBtn) {
+        const svg = templateBtn && templateBtn.querySelector('svg');
+        const cs = templateBtn ? getComputedStyle(templateBtn) : null;
+        let padding = '8px';
+        if (cs && cs.padding && cs.padding !== '0px') padding = cs.padding;
+        else if (templateBtn && templateBtn.firstElementChild) {
+            const inner = getComputedStyle(templateBtn.firstElementChild);
+            if (inner.padding && inner.padding !== '0px') padding = inner.padding;
+        }
+        const heightPx = cs ? parseFloat(cs.height) : 0;
+        const height = (heightPx >= 24 && heightPx <= 64) ? (heightPx + 'px') : '40px';
+        let size = 24;
+        if (svg) {
+            const w = parseFloat(svg.getAttribute('width') || svg.getAttribute('height') || '24');
+            if (w >= 12 && w <= 32) size = w;
+        }
+        let strokeWidth = '2';
+        if (svg) {
+            const stroked = svg.querySelector('[stroke-width]');
+            if (stroked && stroked.getAttribute('stroke-width')) strokeWidth = stroked.getAttribute('stroke-width');
+        }
+        const color = svg ? getComputedStyle(svg).color : (cs ? cs.color : 'currentColor');
+        return { padding, height, size, strokeWidth, color };
+    }
+
+    function buildIcon(kind, metrics) {
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        const size = String(metrics.size || 24);
+        svg.setAttribute('width', size);
+        svg.setAttribute('height', size);
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('aria-hidden', 'true');
+        svg.setAttribute('focusable', 'false');
+        const paths = kind === 'download'
+            ? ['M12 4v10', 'M8 10l4 4 4-4', 'M5 20h14']
+            : ['M14 5h5v5', 'M19 5l-9 9', 'M10 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-4'];
+        paths.forEach((d) => {
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            path.setAttribute('d', d);
+            path.setAttribute('fill', 'none');
+            path.setAttribute('stroke', 'currentColor');
+            path.setAttribute('stroke-width', metrics.strokeWidth || '2');
+            path.setAttribute('stroke-linecap', 'round');
+            path.setAttribute('stroke-linejoin', 'round');
+            svg.appendChild(path);
+        });
+        return svg;
+    }
+
+    function createCustomBtn(kind, templateBtn) {
+        const metrics = templateMetrics(templateBtn);
+        const btn = document.createElement('div');
+        btn.className = 'custom-btn ' + (kind === 'download' ? 'download-btn' : 'newtab-btn');
+        btn.setAttribute('role', 'button');
+        btn.setAttribute('tabindex', '0');
+        const label = kind === 'download' ? 'Download' : 'Open in new tab';
+        btn.setAttribute('aria-label', label);
+        btn.setAttribute('title', label);
+        btn.style.cssText = [
+            'display:inline-flex',
+            'align-items:center',
+            'justify-content:center',
+            'align-self:center',
+            'flex:0 0 auto',
+            'box-sizing:border-box',
+            'margin:0',
+            'border:0',
+            'background:transparent',
+            'cursor:pointer',
+            'line-height:0',
+            'vertical-align:middle',
+            'z-index:2',
+            'color:' + (metrics.color || 'currentColor'),
+            'padding:' + metrics.padding,
+            'height:' + metrics.height,
+            'min-width:' + metrics.height
+        ].join(';');
+        btn.appendChild(buildIcon(kind, metrics));
+        btn.addEventListener('click', onClickHandler);
+        if (hoverToFetchAndAttachLink) btn.addEventListener('mouseenter', onMouseInHandler);
+        return btn;
+    }
+
+    function pairButtons(templateBtn) {
+        return [createCustomBtn('newtab', templateBtn), createCustomBtn('download', templateBtn)];
+    }
+
+    function attachPrefetch(buttons) {
+        if (!prefetchAndAttachLink) return;
+        buttons.forEach((btn) => onMouseInHandler({ currentTarget: btn }));
+    }
+
+    function injectBeforeSave(saveBtn) {
+        const parent = saveBtn.parentElement;
+        if (!parent) return;
+        if ([...parent.children].some((el) => el.classList && el.classList.contains('custom-btn'))) return;
+        const [newtabBtn, downloadBtn] = pairButtons(saveBtn);
+        parent.insertBefore(newtabBtn, saveBtn);
+        parent.insertBefore(downloadBtn, saveBtn);
+        attachPrefetch([newtabBtn, downloadBtn]);
+    }
+
+    function storyControlLabel(el) {
+        const svg = el.querySelector && el.querySelector('svg');
+        return ((el.getAttribute && el.getAttribute('aria-label')) || '') + ' ' + iconLabel(svg);
+    }
+
+    function findStoryControlGroup() {
+        const labelRe = /play|pause|mute|unmute|audio|menu|more|暫停|播放|靜音|音訊|更多|選單|关闭|關閉/i;
+        const buttons = [...document.querySelectorAll('header button, header [role="button"], section button, section [role="button"], [role="dialog"] button, [role="dialog"] [role="button"]')];
+        const matched = buttons.filter((el) => !el.closest('.custom-btn') && !el.closest('.igdl-story-fallback') && labelRe.test(storyControlLabel(el)));
+        const pool = matched.length ? matched : buttons.filter((el) => {
+            return el.closest('header') && el.querySelector('svg') && !el.closest('.custom-btn') && !el.closest('.igdl-story-fallback');
+        });
+        if (!pool.length) return null;
+        const counts = new Map();
+        pool.forEach((el) => {
+            const parent = el.parentElement;
+            if (!parent || parent === document.body) return;
+            counts.set(parent, (counts.get(parent) || 0) + 1);
+        });
+        let best = null;
+        let bestN = 0;
+        counts.forEach((n, parent) => {
+            if (n > bestN) {
+                best = parent;
+                bestN = n;
+            }
+        });
+        return best;
+    }
+
+    function injectStoryButtons(group) {
+        if (!group || group.querySelector(':scope > .custom-btn')) return;
+        const anchor = [...group.children].find((el) => el.matches && el.matches('button, [role="button"]') && !el.classList.contains('custom-btn'));
+        const template = anchor || group.querySelector('button, [role="button"]');
+        const [newtabBtn, downloadBtn] = pairButtons(template);
+        if (anchor) {
+            group.insertBefore(newtabBtn, anchor);
+            group.insertBefore(downloadBtn, anchor);
+        } else {
+            group.append(newtabBtn, downloadBtn);
+        }
+        attachPrefetch([newtabBtn, downloadBtn]);
+    }
+
+    function injectStoryFallback() {
+        if (document.querySelector('.custom-btn')) return;
+        if (document.querySelector('.igdl-story-fallback')) return;
+        const bar = document.createElement('div');
+        bar.className = 'igdl-story-fallback';
+        bar.style.cssText = 'position:fixed;top:12px;right:64px;z-index:100000;display:flex;align-items:center;color:#fff;';
+        const [newtabBtn, downloadBtn] = pairButtons(null);
+        newtabBtn.style.color = '#fff';
+        downloadBtn.style.color = '#fff';
+        bar.append(newtabBtn, downloadBtn);
+        document.body.appendChild(bar);
+        attachPrefetch([newtabBtn, downloadBtn]);
+    }
+
+    let storyMisses = 0;
+    function scanUi() {
+        if (!document.body) return;
+        const curUrl = location.href;
+        if (preUrl !== curUrl) {
+            document.querySelectorAll('.custom-btn, .igdl-story-fallback').forEach((node) => node.remove());
+            storyUrlCache.clear();
+            storyMisses = 0;
+            preUrl = curUrl;
+        }
+
+        if (location.pathname.indexOf('/stories/') !== -1) {
+            const group = findStoryControlGroup();
+            if (group) {
+                document.querySelectorAll('.igdl-story-fallback').forEach((node) => node.remove());
+                storyMisses = 0;
+                injectStoryButtons(group);
+            } else if (!document.querySelector('.custom-btn')) {
+                storyMisses += 1;
+                if (storyMisses >= 4) injectStoryFallback();
+            }
+            return;
+        }
+
+        findSaveButtons(document).forEach(injectBeforeSave);
+
+        if (!location.pathname.includes('stor') && document.querySelector('header section svg circle')) {
+            const header = document.querySelector('header');
+            if (header && !header.querySelector('.custom-btn') && document.getElementsByClassName('custom-btn').length === 0) {
+                addCustomBtn(document.querySelector('header section svg circle'), 'inherit', append2Header);
+            }
+        }
+    }
+
+    let scanScheduled = false;
+    function scheduleScan() {
+        if (scanScheduled) return;
+        scanScheduled = true;
+        setTimeout(() => {
+            scanScheduled = false;
+            try { scanUi(); } catch (err) { console.log('scanUi', err); }
+        }, 80);
+    }
+
+    const uiObserver = new MutationObserver((mutations) => {
+        for (let i = 0; i < mutations.length; i++) {
+            const target = mutations[i].target;
+            if (target && target.closest && (target.closest('.custom-btn') || target.closest('.igdl-story-fallback'))) return;
+        }
+        scheduleScan();
+    });
+    uiObserver.observe(document.documentElement, { childList: true, subtree: true });
+    window.addEventListener('popstate', scheduleScan);
+    const pushState = history.pushState;
+    const replaceState = history.replaceState;
+    history.pushState = function () {
+        const result = pushState.apply(this, arguments);
+        scheduleScan();
+        return result;
+    };
+    history.replaceState = function () {
+        const result = replaceState.apply(this, arguments);
+        scheduleScan();
+        return result;
+    };
+    scheduleScan();
+    // Backup for SPA route changes that do not mutate the observed tree immediately.
+    setInterval(scheduleScan, 1000);
+
+    function append2Header(node, btn) {
+        node.parentNode.parentNode.parentNode.appendChild(btn);
+    }
+
+    function addCustomBtn(node, iconColor, appendNode) {
+        const template = closestControl(node);
+        const [newtabBtn, downloadBtn] = pairButtons(template);
+        if (iconColor === 'white') {
+            newtabBtn.style.color = 'white';
+            downloadBtn.style.color = 'white';
+        }
+        appendNode(node, newtabBtn);
+        appendNode(node, downloadBtn);
+        attachPrefetch([newtabBtn, downloadBtn]);
+    }
+
+    var preUrl = '';
 
     document.addEventListener('keydown', keyDownHandler);
 
@@ -113,139 +436,12 @@
         }
 
         if (event.altKey && (event.code === 'KeyL' || event.key == 'l')) {
-            // right arrow
-            let buttons = document.getElementsByClassName('_9zm2');
-            if (buttons.length > 0) {
-                buttons[0].click();
-            }
+            clickCarouselControl('next');
         }
 
         if (event.altKey && (event.code === 'KeyJ' || event.key == 'j')) {
-            // left arrow
-            let buttons = document.getElementsByClassName('_9zm0');
-            if (buttons.length > 0) {
-                buttons[0].click();
-            }
+            clickCarouselControl('prev');
         }
-    }
-
-    function isPostPage() {
-        return Boolean(window.location.href.match(postUrlPattern));
-    }
-
-    function queryHas(root, selector, has) {
-        let nodes = root.querySelectorAll(selector);
-        for (let i = 0; i < nodes.length; ++i) {
-            let currentNode = nodes[i];
-            if (currentNode.querySelector(has)) {
-                return currentNode;
-            }
-        }
-        return null;
-    }
-
-    var checkExistTimer = setInterval(function () {
-        const curUrl = window.location.href;
-        const savePostSelector = 'article *:not(li)>*>*>*>div:not([class])>div[role="button"]:not([style]):not([tabindex="-1"])';
-        const storySelector = 'section > *:not(main) header div>svg:not([aria-label=""])';
-        const profileSelector = 'header section svg circle';
-        const playSvgPathSelector = 'path[d="M5.888 22.5a3.46 3.46 0 0 1-1.721-.46l-.003-.002a3.451 3.451 0 0 1-1.72-2.982V4.943a3.445 3.445 0 0 1 5.163-2.987l12.226 7.059a3.444 3.444 0 0 1-.001 5.967l-12.22 7.056a3.462 3.462 0 0 1-1.724.462Z"]';
-        const pauseSvgPathSelector = 'path[d="M15 1c-3.3 0-6 1.3-6 3v40c0 1.7 2.7 3 6 3s6-1.3 6-3V4c0-1.7-2.7-3-6-3zm18 0c-3.3 0-6 1.3-6 3v40c0 1.7 2.7 3 6 3s6-1.3 6-3V4c0-1.7-2.7-3-6-3z"]';
-
-        let rgb = getComputedStyle(document.body).backgroundColor.match(/[.?\d]+/g);
-        let iconColor = (rgb[0] * 0.299 + rgb[1] * 0.587 + rgb[2] * 0.114) <= 150 ? 'white' : 'black'
-
-        // clear all custom buttons when url changing
-        if (preUrl !== curUrl) {
-            while (document.getElementsByClassName('custom-btn').length !== 0) {
-                document.getElementsByClassName('custom-btn')[0].remove();
-            }
-        }
-
-        // check post
-        let articleList = document.querySelectorAll('article');
-        for (let i = 0; i < articleList.length; i++) {
-            let buttonAnchor = (Array.from(articleList[i].querySelectorAll(savePostSelector))).pop();
-            if (buttonAnchor && articleList[i].getElementsByClassName('custom-btn').length === 0) {
-                addCustomBtn(buttonAnchor, iconColor, append2Post);
-            }
-        }
-
-        // check independent post page
-        if (isPostPage()) {
-            let savebtn = queryHas(document, 'div[role="button"] > div[role="button"]:not([style])', 'polygon[points="20 21 12 13.44 4 21 4 3 20 3 20 21"]') || queryHas(document, 'div[role="button"] > div[role="button"]:not([style])', 'path[d="M20 22a.999.999 0 0 1-.687-.273L12 14.815l-7.313 6.912A1 1 0 0 1 3 21V3a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1Z"]');
-            if (document.getElementsByClassName('custom-btn').length === 0) {
-                if (savebtn.parentNode.querySelector('svg')) {
-                    addCustomBtn(savebtn.parentNode.querySelector('svg'), iconColor, append2IndependentPost);
-                }
-            }
-        }
-
-        // check profile
-        if (document.getElementsByClassName('custom-btn').length === 0 && !curUrl.includes("stor")) {
-            if (document.querySelector(profileSelector)) {
-                addCustomBtn(document.querySelector(profileSelector), iconColor, append2Header);
-            }
-        }
-
-        // check story
-        if (document.getElementsByClassName('custom-btn').length === 0) {
-            let playPauseSvg = queryHas(document, 'svg', playSvgPathSelector) || queryHas(document, 'svg', pauseSvgPathSelector);
-            if (playPauseSvg) {
-                let buttonDiv = playPauseSvg.parentNode;
-                addCustomBtn(buttonDiv, 'white', append2Story);
-            }
-        }
-
-        preUrl = curUrl;
-    }, 500);
-
-    function append2Post(node, btn) {
-        node.append(btn);
-    }
-
-    function append2IndependentPost(node, btn) {
-        node.parentNode.parentNode.append(btn);
-    }
-
-    function append2Header(node, btn) {
-        node.parentNode.parentNode.parentNode.appendChild(btn, node.parentNode.parentNode);
-    }
-
-    function append2Story(node, btn) {
-        node.parentNode.parentNode.parentNode.append(btn);
-    }
-
-    function addCustomBtn(node, iconColor, appendNode) {
-        // add download button and set event handlers
-        // add newtab button
-        let newtabBtn = createCustomBtn(svgNewtabBtn, iconColor, 'newtab-btn', '16px');
-        appendNode(node, newtabBtn);
-
-        // add download button
-        let downloadBtn = createCustomBtn(svgDownloadBtn, iconColor, 'download-btn', '14px');
-        appendNode(node, downloadBtn);
-
-        if (prefetchAndAttachLink) {
-            onMouseInHandler({ currentTarget: newtabBtn });
-            onMouseInHandler({ currentTarget: downloadBtn });
-        }
-    }
-
-    function createCustomBtn(svg, iconColor, className, marginLeft) {
-        let newBtn = document.createElement('a');
-        newBtn.innerHTML = svg.replace('%color', iconColor);
-        newBtn.setAttribute('class', 'custom-btn ' + className);
-        newBtn.setAttribute('target', '_blank');
-        newBtn.setAttribute('style', 'cursor: pointer;margin-left: ' + marginLeft + ';margin-top: 8px;z-index: 999;');
-        newBtn.onclick = onClickHandler;
-        if (hoverToFetchAndAttachLink) newBtn.onmouseenter = onMouseInHandler;
-        if (className.includes('newtab')) {
-            newBtn.setAttribute('title', 'Open in new tab');
-        } else {
-            newBtn.setAttribute('title', 'Download');
-        }
-        return newBtn;
     }
 
     function onClickHandler(e) {
@@ -475,7 +671,7 @@
 
                     if (!(postId in mediaIdCache)) {
                         let postUrl = `https://www.instagram.com/p/${postId}/`;
-                        let resp = await fetch(postUrl);
+                        let resp = await pageFetch(postUrl);
                         let text = await resp.text();
                         let idMatch = text ? text.match(mediaIdPattern) : [];
                         let mediaId = null;
@@ -536,7 +732,7 @@
             }
             if (!(mediaId in infoCache)) {
                 let url = 'https://i.instagram.com/api/v1/media/' + mediaId + '/info/';
-                let resp = await fetch(url, headers);
+                let resp = await pageFetch(url, headers);
                 if (resp.status !== 200) {
                     console.log(`Fetch info API failed with status code: ${resp.status}`);
                     console.log(`context: ${JSON.stringify(await resp.json(), space=2)}`);
@@ -607,7 +803,7 @@
         const posterPattern = /\/([^\/?]*)\?/;
         let posterMatch = poster.match(posterPattern);
         let postFileName = posterMatch[1];
-        let resp = await fetch(posterUrl);
+        let resp = await pageFetch(posterUrl);
         let content = await resp.text();
         // special thanks to 孙年忠 for the pattern (https://greasyfork.org/zh-TW/scripts/406535-instagram-download-button/discussions/116675)
         const pattern = new RegExp(`${postFileName}.*?video_versions.*?url":("[^"]*")`, 's');
@@ -622,40 +818,40 @@
     // ====   Story & Highlight    ====
     // ================================
     async function storyOnMouseIn(target) {
-        let sectionNode = storyGetSectionNode(target);
-        let url = await storyGetUrl(target, sectionNode);
-        target.setAttribute('href', url);
+        const sectionNode = storyGetSectionNode(target);
+        const url = await storyGetUrl(target, sectionNode);
+        if (url) target.setAttribute('href', url);
     }
 
     async function storyOnClicked(target) {
-        // extract url from target story and download or open it
-        let sectionNode = storyGetSectionNode(target);
-        let url = await storyGetUrl(target, sectionNode);
-        const posterUrlPat = /\/stories\/(.*)\/.*\//
-        // download or open media url
-        if (target.getAttribute('class').includes('download-btn')) {
-            let mediaName = url.split('?')[0].split('\\').pop().split('/').pop();
-            mediaName = mediaName.substring(0, mediaName.lastIndexOf('.'));
-            let datetime = new Date(sectionNode.querySelector('time').getAttribute('datetime'));
-            let posterName = "unkown";
-            // method 1
-            const posterNameHeader = sectionNode.querySelector('header a');
-            if (posterNameHeader) {
-                posterName = posterNameHeader.getAttribute('href').replace(/\//g, '');
+        try {
+            const sectionNode = storyGetSectionNode(target) || document.querySelector('section') || document.body;
+            const url = await storyGetUrl(target, sectionNode);
+            if (!url) {
+                console.log('Story media URL not found');
+                return;
             }
-
-            // method 2
-            if (posterName === "unkown") {
-                const match = window.location.pathname.match(posterUrlPat);
-                if (match) {
-                    posterName = match[1];
+            if (target.getAttribute('class').includes('download-btn')) {
+                let mediaName = url.split('?')[0].split('\\').pop().split('/').pop();
+                mediaName = mediaName.substring(0, mediaName.lastIndexOf('.'));
+                const timeEl = sectionNode.querySelector && sectionNode.querySelector('time');
+                const datetime = timeEl ? new Date(timeEl.getAttribute('datetime')) : new Date();
+                let posterName = 'unknown';
+                const posterNameHeader = sectionNode.querySelector && sectionNode.querySelector('header a');
+                if (posterNameHeader) {
+                    posterName = posterNameHeader.getAttribute('href').replace(/\//g, '');
                 }
+                if (!posterName || posterName === 'unknown') {
+                    const match = window.location.pathname.match(/\/stories\/([^/]+)/);
+                    if (match) posterName = match[1];
+                }
+                const filename = filenameFormat(storyFilenameTemplate, posterName, datetime, mediaName);
+                downloadResource(url, filename);
+            } else {
+                openResource(url);
             }
-            let filename = filenameFormat(storyFilenameTemplate, posterName, datetime, mediaName);
-            downloadResource(url, filename);
-        } else {
-            // open url in new tab
-            openResource(url);
+        } catch (e) {
+            console.log(`Uncatched in storyOnClicked(): ${e}\n${e.stack}`);
         }
     }
 
@@ -664,28 +860,208 @@
         while (sectionNode && sectionNode.tagName !== 'SECTION') {
             sectionNode = sectionNode.parentNode;
         }
-        return sectionNode;
+        if (sectionNode) return sectionNode;
+        return document.querySelector('[role="dialog"]') || document.querySelector('section');
+    }
+
+    let cachedAppId = null;
+    function getAppId() {
+        if (cachedAppId) return cachedAppId;
+        const patterns = [/"X-IG-App-ID":"(\d+)"/, /"appId":"(\d+)"/, /"appId":(\d{10,})/];
+        const scripts = document.querySelectorAll('script');
+        for (let i = 0; i < scripts.length; i++) {
+            const text = scripts[i].textContent || '';
+            if (text.length < 20) continue;
+            for (let p = 0; p < patterns.length; p++) {
+                const match = text.match(patterns[p]);
+                if (match) {
+                    cachedAppId = match[1];
+                    return cachedAppId;
+                }
+            }
+        }
+        cachedAppId = WEB_APP_ID;
+        return cachedAppId;
+    }
+
+    function igRequestHeaders(hasBody) {
+        const headers = {
+            Accept: '*/*',
+            'X-IG-App-ID': getAppId(),
+            'X-ASBD-ID': '359341',
+            'X-IG-WWW-Claim': '0',
+            'X-Requested-With': 'XMLHttpRequest'
+        };
+        const csrf = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+        if (csrf) headers['X-CSRFToken'] = decodeURIComponent(csrf[1]);
+        if (hasBody) headers['Content-Type'] = 'application/x-www-form-urlencoded';
+        return headers;
+    }
+
+    async function igFetchJson(url, options) {
+        const method = (options && options.method) || 'GET';
+        const body = options && options.body;
+        try {
+            const resp = await pageFetch(url, {
+                method: method,
+                credentials: 'include',
+                headers: igRequestHeaders(!!body),
+                body: body ? body.toString() : undefined
+            });
+            if (!resp.ok) {
+                console.log(`IG API ${resp.status} ${url}`);
+                return null;
+            }
+            return await resp.json();
+        } catch (e) {
+            console.log(`IG API error ${url}: ${e}`);
+            return null;
+        }
+    }
+
+    function bestItemUrl(item) {
+        if (!item) return null;
+        if (item.video_versions && item.video_versions.length) {
+            const best = item.video_versions.reduce((a, b) => ((b.width || 0) > (a.width || 0) ? b : a));
+            if (best && best.url && !String(best.url).startsWith('blob:')) return best.url;
+        }
+        const candidates = item.image_versions2 && item.image_versions2.candidates;
+        if (candidates && candidates.length) {
+            const best = candidates.reduce((a, b) => ((b.width || 0) > (a.width || 0) ? b : a));
+            if (best && best.url && !String(best.url).startsWith('blob:')) return best.url;
+        }
+        return null;
+    }
+
+    function storyProgressIndex() {
+        const header = document.querySelector('section header, [role="dialog"] header');
+        if (!header) return 0;
+        const divs = header.querySelectorAll('div');
+        for (let i = 0; i < divs.length; i++) {
+            const kids = [...divs[i].children];
+            if (kids.length < 2 || kids.length > 40) continue;
+            const widths = kids.map((kid) => kid.getBoundingClientRect().width);
+            if (!widths.length || widths.some((w) => w < 2)) continue;
+            const same = widths.every((w) => Math.abs(w - widths[0]) < 4);
+            if (!same) continue;
+            for (let k = 0; k < kids.length; k++) {
+                const fill = kids[k].firstElementChild;
+                if (!fill) return k;
+                const parentW = kids[k].getBoundingClientRect().width || 1;
+                const fillW = fill.getBoundingClientRect().width;
+                if (fillW < parentW - 1) return k;
+            }
+            return kids.length - 1;
+        }
+        return 0;
+    }
+
+    const userIdCache = {};
+    async function usernameToId(username) {
+        if (!username || username === 'highlights') return null;
+        if (userIdCache[username]) return userIdCache[username];
+        const data = await igFetchJson('https://www.instagram.com/api/v1/users/web_profile_info/?username=' + encodeURIComponent(username));
+        const id = data && data.data && data.data.user && data.data.user.id;
+        if (id) userIdCache[username] = String(id);
+        return userIdCache[username] || null;
+    }
+
+    function pickReelItem(reel) {
+        const items = reel && reel.items;
+        if (!items || !items.length) return null;
+        const mediaInUrl = location.pathname.match(/\/stories\/(?!highlights\/)[^/]+\/(\d+)/);
+        if (mediaInUrl) {
+            const id = mediaInUrl[1];
+            const hit = items.find((item) => String(item.pk) === id || String(item.id || '').split('_')[0] === id);
+            if (hit) return hit;
+        }
+        let index = storyProgressIndex();
+        if (index < 0 || index >= items.length) index = 0;
+        return items[index];
+    }
+
+    const storyUrlCache = new Map();
+    async function fetchCurrentStoryUrl() {
+        const cacheKey = location.pathname + '|' + storyProgressIndex();
+        if (storyUrlCache.has(cacheKey)) return storyUrlCache.get(cacheKey);
+
+        const userStory = location.pathname.match(/^\/stories\/([^/]+)\/(\d+)\/?/);
+        const highlight = location.pathname.match(/^\/stories\/highlights\/([^/]+)\/?/);
+        const userOnly = location.pathname.match(/^\/stories\/([^/]+)\/?$/);
+        let url = null;
+
+        if (userStory && userStory[1] !== 'highlights') {
+            const info = await igFetchJson('https://www.instagram.com/api/v1/media/' + userStory[2] + '/info/');
+            url = info && info.items && info.items[0] ? bestItemUrl(info.items[0]) : null;
+        }
+
+        if (!url) {
+            let reelId = null;
+            let mediaId = null;
+            if (highlight) {
+                reelId = 'highlight:' + highlight[1];
+            } else if (userStory && userStory[1] !== 'highlights') {
+                mediaId = userStory[2];
+                reelId = await usernameToId(userStory[1]);
+            } else if (userOnly && userOnly[1] !== 'highlights') {
+                reelId = await usernameToId(userOnly[1]);
+            }
+            if (reelId) {
+                const loggedIn = /(?:^|;\s*)sessionid=/.test(document.cookie);
+                let data = null;
+                if (loggedIn) {
+                    const body = new URLSearchParams();
+                    body.set('reel_ids', JSON.stringify([reelId]));
+                    if (mediaId) body.set('media_id', mediaId);
+                    data = await igFetchJson('https://www.instagram.com/api/v1/feed/reels_media/', { method: 'POST', body: body });
+                }
+                if (!data) {
+                    const query = new URLSearchParams();
+                    query.set('reel_ids', reelId);
+                    if (mediaId) query.set('media_id', mediaId);
+                    data = await igFetchJson('https://www.instagram.com/api/v1/feed/reels_media/?' + query.toString());
+                }
+                const reel = data && data.reels && (data.reels[reelId] || Object.values(data.reels)[0]);
+                url = bestItemUrl(pickReelItem(reel));
+            }
+        }
+
+        if (url) storyUrlCache.set(cacheKey, url);
+        return url;
+    }
+
+    function domStoryUrl(root) {
+        if (!root || !root.querySelector) return null;
+        const videos = root.querySelectorAll('video');
+        for (let i = 0; i < videos.length; i++) {
+            const src = videos[i].currentSrc || videos[i].getAttribute('src') || '';
+            if (src && !src.startsWith('blob:')) return src;
+            const source = videos[i].querySelector('source');
+            if (source && source.src && !source.src.startsWith('blob:')) return source.src;
+        }
+        let best = null;
+        let bestArea = 0;
+        root.querySelectorAll('img').forEach((img) => {
+            const rect = img.getBoundingClientRect();
+            const area = rect.width * rect.height;
+            if (rect.width < 200 || area <= bestArea) return;
+            const src = img.currentSrc || img.getAttribute('src') || '';
+            if (!src || src.startsWith('blob:') || src.startsWith('data:')) return;
+            best = src;
+            bestArea = area;
+        });
+        return best;
     }
 
     async function storyGetUrl(target, sectionNode) {
         let url = null;
-        if (!disableNewUrlFetchMethod) url = await getUrlFromInfoApi(target);
-
-        if (!url) {
-            if (sectionNode.querySelector('video > source')) {
-                url = sectionNode.querySelector('video > source').getAttribute('src');
-            } else if (sectionNode.querySelector('img[decoding="sync"]')) {
-                let img = sectionNode.querySelector('img[decoding="sync"]');
-                url = img.srcset.split(/ \d+w/g)[0].trim(); // extract first src from srcset attr. of img
-                if (url.length > 0) {
-                    return url;
-                }
-                url = sectionNode.querySelector('img[decoding="sync"]').getAttribute('src');
-            } else if (sectionNode.querySelector('video')) {
-                url = sectionNode.querySelector('video').getAttribute('src');
-            }
+        if (!disableNewUrlFetchMethod) {
+            url = await fetchCurrentStoryUrl();
+            if (!url) url = await getUrlFromInfoApi(target);
         }
-        return url;
+        if (url && !String(url).startsWith('blob:')) return url;
+        const root = (sectionNode && sectionNode.querySelector) ? sectionNode : document;
+        return domStoryUrl(root);
     }
 
     function filenameFormat(template, id, datetime, medianame, postId = +new Date(), mediaIndex = '0') {
@@ -753,19 +1129,37 @@
                 .split('/')
                 .pop();
         }
-        fetch(url, {
+        const saveBlob = (blob) => {
+            const extension = (blob.type || 'application/octet-stream').split('/').pop();
+            const blobUrl = window.URL.createObjectURL(blob);
+            forceDownload(blobUrl, filename, extension);
+        };
+        pageFetch(url, {
             headers: new Headers({
-                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 12_3_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Instagram 105.0.0.11.118 (iPhone11,8; iOS 12_3_1; en_US; en-US; scale=2.00; 828x1792; 165586599)', //window.navigator.userAgent,
                 Origin: location.origin,
             }),
             mode: 'cors',
         })
-            .then(response => response.blob())
-            .then(blob => {
-                const extension = blob.type.split('/').pop();
-                let blobUrl = window.URL.createObjectURL(blob);
-                forceDownload(blobUrl, filename, extension);
+            .then(response => {
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                return response.blob();
             })
-            .catch(e => console.error(e));
+            .then(saveBlob)
+            .catch(e => {
+                if (typeof GM_xmlhttpRequest !== 'function') {
+                    console.error(e);
+                    return;
+                }
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: url,
+                    responseType: 'blob',
+                    onload: (r) => {
+                        if (r.status >= 200 && r.status < 300 && r.response) saveBlob(r.response);
+                        else console.error('GM download failed', r.status, e);
+                    },
+                    onerror: (err) => console.error(err || e)
+                });
+            });
     }
 })();
