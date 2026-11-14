@@ -9,7 +9,7 @@
 // @name:hi             इंस्टाग्राम डाउनलोडर
 // @name:ru             Загрузчик Instagram
 // @namespace           https://github.com/hfming225/Instagram_Download_Button
-// @version             1.18.2
+// @version             1.18.3
 // @compatible          chrome
 // @description         Add the download button and the open button to download or open profile picture and media in the posts, stories, and highlights in Instagram
 // @description:zh-TW   在Instagram頁面加入下載按鈕與開啟按鈕，透過這些按鈕可以下載或開啟大頭貼與貼文、限時動態、Highlight中的照片或影片
@@ -146,33 +146,46 @@
         return node && node.closest ? node.closest('button, [role="button"]') : null;
     }
 
+    function isBlockedPath() {
+        return /^\/(direct|accounts|challenge|legal|about|emails|privacy|terms|notifications)(\/|$)/.test(location.pathname);
+    }
+
+    function inExcludedChrome(el) {
+        if (!el || !el.closest) return false;
+        return !!el.closest('nav, [role="navigation"], [role="menu"], [aria-label="Notifications"], [aria-label="通知"]');
+    }
+
+    function hasLargeMedia(root) {
+        if (!root || !root.querySelectorAll) return false;
+        const nodes = root.querySelectorAll('img, video');
+        for (let i = 0; i < nodes.length; i++) {
+            if (nodes[i].closest && nodes[i].closest('header')) continue;
+            const rect = nodes[i].getBoundingClientRect();
+            if (rect.width >= 180 && rect.height >= 180) return true;
+        }
+        return false;
+    }
+
+    function postRootFor(btn) {
+        if (!btn || !btn.closest || inExcludedChrome(btn)) return null;
+        const dialog = btn.closest('[role="dialog"]');
+        if (dialog && hasLargeMedia(dialog)) return dialog;
+        const article = btn.closest('article');
+        if (article && hasLargeMedia(article)) return article;
+        return null;
+    }
+
     function findSaveButtons(root) {
         const found = [];
         const seen = new Set();
-        const push = (btn) => {
-            if (!btn || seen.has(btn) || btn.closest('.custom-btn') || btn.closest('[data-igdl-story]') || btn.closest('.igdl-action-cluster')) return;
+        root.querySelectorAll('svg').forEach((svg) => {
+            if (!isSaveIcon(svg) || inExcludedChrome(svg)) return;
+            const btn = closestControl(svg);
+            if (!btn || seen.has(btn) || btn.closest('.custom-btn, .igdl-action-cluster, [data-igdl-story]')) return;
+            const postRoot = postRootFor(btn);
+            if (!postRoot || postRoot.querySelector('.igdl-action-cluster')) return;
             seen.add(btn);
             found.push(btn);
-        };
-        root.querySelectorAll('svg').forEach((svg) => {
-            if (isSaveIcon(svg)) push(closestControl(svg));
-        });
-
-        // Action row with counts (like / comment / repost / share) and an icon-only bookmark on the right.
-        // Runs per post so a recognized bookmark on one article does not skip the others.
-        const scopes = root.querySelectorAll('article, main, [role="dialog"]');
-        scopes.forEach((scope) => {
-            if ([...seen].some((btn) => scope.contains(btn))) return;
-            const buttons = [...scope.querySelectorAll('button, [role="button"]')].filter((btn) => {
-                return btn.querySelector('svg') && !btn.closest('.custom-btn');
-            });
-            if (buttons.length < 3) return;
-            const withCount = buttons.filter((btn) => /\d/.test((btn.innerText || '').trim()) && (btn.innerText || '').trim().length < 16);
-            if (!withCount.length) return;
-            const iconOnly = buttons.filter((btn) => !/\d/.test((btn.innerText || '').trim()));
-            if (!iconOnly.length) return;
-            iconOnly.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-            push(iconOnly[iconOnly.length - 1]);
         });
         return found;
     }
@@ -255,7 +268,6 @@
             'min-height:' + metrics.size + 'px'
         ].join(';');
         btn.appendChild(buildIcon(kind, metrics));
-        btn.addEventListener('click', onClickHandler);
         if (hoverToFetchAndAttachLink) btn.addEventListener('mouseenter', onMouseInHandler);
         return btn;
     }
@@ -295,18 +307,58 @@
     }
 
     function injectBeforeSave(saveBtn) {
-        if (!saveBtn || saveBtn.closest('.igdl-action-cluster') || saveBtn.closest('[data-igdl-story]')) return;
+        if (isBlockedPath() || /^\/reels?\//.test(location.pathname)) return;
+        if (!saveBtn || saveBtn.closest('.igdl-action-cluster, [data-igdl-story]') || inExcludedChrome(saveBtn)) return;
+        const root = postRootFor(saveBtn);
+        if (!root || root.querySelector('.igdl-action-cluster')) return;
         const row = findHorizontalActionRow(saveBtn);
-        if (!row) return;
+        if (!row || !saveBtn.parentElement) return;
         let slot = saveBtn;
         while (slot.parentElement && slot.parentElement !== row) slot = slot.parentElement;
         const cluster = document.createElement('div');
         cluster.className = 'igdl-action-cluster';
-        cluster.style.cssText = 'display:inline-flex;flex-flow:row nowrap;align-items:center;justify-content:flex-end;width:max-content;max-width:none;flex:0 0 auto;align-self:center;margin:0;';
-        row.insertBefore(cluster, slot);
+        cluster.style.cssText = 'display:inline-flex;flex-flow:row nowrap;align-items:center;justify-content:flex-end;width:max-content;max-width:none;flex:0 0 auto;align-self:center;margin:0 0 0 auto;';
+        // Sibling only. The bookmark stays where React put it.
+        slot.parentElement.insertBefore(cluster, slot);
         const [newtabBtn, downloadBtn] = pairButtons(saveBtn, { forceSize: 24 });
-        cluster.append(newtabBtn, downloadBtn, saveBtn);
-        if (slot !== saveBtn && slot.childElementCount === 0) slot.remove();
+        cluster.append(newtabBtn, downloadBtn);
+        attachPrefetch([newtabBtn, downloadBtn]);
+    }
+
+    function findReelColumns() {
+        if (!/^\/reels?\//.test(location.pathname)) return [];
+        const columns = [];
+        const nodes = document.querySelectorAll('div');
+        for (let i = 0; i < nodes.length; i++) {
+            const el = nodes[i];
+            if (inExcludedChrome(el) || el.closest('.custom-btn, .igdl-action-cluster')) continue;
+            if (el.querySelector(':scope > .igdl-action-cluster')) continue;
+            const style = getComputedStyle(el);
+            if (style.flexDirection !== 'column' && style.flexDirection !== 'column-reverse') continue;
+            const rect = el.getBoundingClientRect();
+            if (rect.left < 220 || rect.width > 140 || rect.height < 160 || rect.width < 24) continue;
+            const buttons = [...el.querySelectorAll('button, [role="button"]')].filter((btn) => {
+                return btn.querySelector('svg') && el.contains(btn) && !btn.closest('.custom-btn');
+            });
+            if (buttons.length < 3) continue;
+            const withCount = buttons.filter((btn) => /\d/.test((btn.innerText || '').trim()));
+            if (!withCount.length) continue;
+            columns.push(el);
+        }
+        return columns.filter((el) => !columns.some((other) => other !== el && el.contains(other)));
+    }
+
+    function injectReelColumn(column) {
+        if (!column || column.querySelector('.igdl-action-cluster')) return;
+        const cluster = document.createElement('div');
+        cluster.className = 'igdl-action-cluster';
+        cluster.style.cssText = 'display:flex;flex-direction:column;align-items:center;flex:0 0 auto;margin-top:8px;color:#fff;';
+        const template = column.querySelector('[role="button"], button');
+        const [newtabBtn, downloadBtn] = pairButtons(template, { forceSize: 24, color: '#fff', padding: 6 });
+        newtabBtn.style.color = '#fff';
+        downloadBtn.style.color = '#fff';
+        cluster.append(newtabBtn, downloadBtn);
+        column.appendChild(cluster);
         attachPrefetch([newtabBtn, downloadBtn]);
     }
 
@@ -368,13 +420,7 @@
         controls.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
         const menu = controls[controls.length - 1];
         const parent = menu.parentElement;
-        if (!parent) return;
-        const parentStyle = getComputedStyle(parent);
-        if (parentStyle.display === 'flex' || parentStyle.display === 'inline-flex') {
-            if (parentStyle.flexDirection === 'column') parent.style.flexDirection = 'row';
-            if (parentStyle.flexWrap === 'wrap') parent.style.flexWrap = 'nowrap';
-            parent.style.alignItems = 'center';
-        }
+        if (!parent || inExcludedChrome(menu)) return;
         viewer.setAttribute('data-igdl-story', '1');
         const tools = document.createElement('span');
         tools.className = 'igdl-story-tools';
@@ -403,23 +449,29 @@
 
     let storyMisses = 0;
     function clearInjected() {
-        document.querySelectorAll('.igdl-action-cluster').forEach((cluster) => {
-            const save = [...cluster.children].find((el) => !el.classList.contains('custom-btn'));
-            if (save && cluster.parentElement) cluster.parentElement.insertBefore(save, cluster);
-            cluster.remove();
-        });
-        document.querySelectorAll('.custom-btn, .igdl-story-fallback, .igdl-story-tools').forEach((node) => node.remove());
+        document.querySelectorAll('.custom-btn, .igdl-story-fallback, .igdl-story-tools, .igdl-action-cluster').forEach((node) => node.remove());
         document.querySelectorAll('[data-igdl-story]').forEach((node) => node.removeAttribute('data-igdl-story'));
     }
 
     function scanUi() {
         if (!document.body) return;
         const curUrl = location.href;
+        if (isBlockedPath()) {
+            if (document.querySelector('.custom-btn, .igdl-action-cluster, .igdl-story-tools, .igdl-story-fallback')) clearInjected();
+            preUrl = curUrl;
+            return;
+        }
         if (preUrl !== curUrl) {
             clearInjected();
             storyUrlCache.clear();
             storyMisses = 0;
             preUrl = curUrl;
+        }
+
+        const reelPage = /^\/reels?\//.test(location.pathname);
+        if (reelPage) {
+            findReelColumns().forEach(injectReelColumn);
+            return;
         }
 
         const viewers = findStoryViewers();
@@ -535,11 +587,29 @@
         }
     }
 
+    let clickLock = false;
+    document.addEventListener('click', (event) => {
+        const btn = event.target && event.target.closest && event.target.closest('.custom-btn');
+        if (!btn || isBlockedPath()) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (clickLock) return;
+        clickLock = true;
+        setTimeout(() => { clickLock = false; }, 400);
+        igdlLog('click', btn.className, location.pathname);
+        onClickHandler({
+            currentTarget: btn,
+            preventDefault: function () {},
+            stopPropagation: function () {}
+        });
+    }, true);
+
     function onClickHandler(e) {
         // handle button click
         let target = e.currentTarget;
-        e.stopPropagation();
-        e.preventDefault();
+        if (e.stopPropagation) e.stopPropagation();
+        if (e.preventDefault) e.preventDefault();
+        if (isBlockedPath()) return;
         if (window.location.pathname.includes('stories') || (target.closest && target.closest('[data-igdl-story], .igdl-story-tools, .igdl-story-fallback'))) {
             storyOnClicked(target);
         } else if (document.querySelector('header') && document.querySelector('header').contains(target) && !(target.closest && target.closest('[data-igdl-story]'))) {
@@ -644,10 +714,16 @@
 
     function postGetArticleNode(target) {
         if (target && target.closest) {
+            const dialog = target.closest('[role="dialog"]');
+            if (dialog) {
+                const inner = target.closest('article');
+                if (inner && dialog.contains(inner)) return inner;
+                return dialog;
+            }
             const article = target.closest('article');
             if (article) return article;
-            const dialog = target.closest('[role="dialog"]');
-            if (dialog) return dialog;
+            const column = target.closest('.igdl-action-cluster');
+            if (column && column.parentElement) return column.parentElement;
         }
         let articleNode = target;
         while (articleNode && articleNode.tagName !== 'ARTICLE' && articleNode.tagName !== 'MAIN') {
@@ -958,18 +1034,24 @@
         return id.toString();
     }
 
+    function pageShortcode() {
+        const page = location.pathname.match(/^\/(?:p|reels?)\/([A-Za-z0-9_-]+)/);
+        return page ? page[1] : null;
+    }
+
     function findPostId(articleNode) {
+        const page = pageShortcode();
+        if (page && /^\/reels?\//.test(location.pathname)) return page;
         const scope = articleNode && articleNode.querySelectorAll ? articleNode : document;
         const anchors = scope.querySelectorAll('a[href]');
         for (let i = 0; i < anchors.length; i++) {
             const link = anchors[i].getAttribute('href') || '';
-            const match = link.match(/\/(?:p|reel)\/([A-Za-z0-9_-]+)/);
+            const match = link.match(/\/(?:p|reels?)\/([A-Za-z0-9_-]+)/);
             if (match) return match[1];
         }
-        if (/^\/(?:p|reel)\//.test(location.pathname)) {
-            const page = location.pathname.match(/\/(?:p|reel)\/([A-Za-z0-9_-]+)/);
-            if (page) return page[1];
-        }
+        if (!page) return null;
+        if (articleNode && articleNode.closest && articleNode.closest('[role="dialog"]')) return page;
+        if (/^\/p\//.test(location.pathname) && articleNode && (articleNode.tagName === 'MAIN' || articleNode.tagName === 'ARTICLE')) return page;
         return null;
     }
 
