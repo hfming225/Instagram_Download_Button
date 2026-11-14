@@ -9,7 +9,7 @@
 // @name:hi             इंस्टाग्राम डाउनलोडर
 // @name:ru             Загрузчик Instagram
 // @namespace           https://github.com/hfming225/Instagram_Download_Button
-// @version             1.18.6
+// @version             1.18.7
 // @compatible          chrome
 // @description         Add the download button and the open button to download or open profile picture and media in the posts, stories, and highlights in Instagram
 // @description:zh-TW   在Instagram頁面加入下載按鈕與開啟按鈕，透過這些按鈕可以下載或開啟大頭貼與貼文、限時動態、Highlight中的照片或影片
@@ -357,29 +357,68 @@
         cluster.style.transform = 'translateY(-50%)';
     }
 
+    const HOVER_BUBBLE_EVENTS = ['mouseover', 'mouseout', 'mouseenter', 'mouseleave', 'pointerover', 'pointerout', 'pointerenter', 'pointerleave', 'pointermove', 'mousemove', 'focusin', 'focusout'];
+
+    function stopHoverBubble(node) {
+        HOVER_BUBBLE_EVENTS.forEach((type) => {
+            node.addEventListener(type, (event) => {
+                event.stopPropagation();
+            });
+        });
+    }
+
+    function bookmarkOuter(saveBtn) {
+        let outer = saveBtn;
+        let node = saveBtn.parentElement;
+        for (let depth = 0; node && depth < 6 && node !== document.body; depth++, node = node.parentElement) {
+            const buttons = [...node.querySelectorAll('button, [role="button"]')].filter((btn) => {
+                return !btn.closest('.igdl-anchor, .custom-btn');
+            });
+            if (buttons.some((btn) => btn !== saveBtn && !saveBtn.contains(btn))) break;
+            const rect = node.getBoundingClientRect();
+            if (rect.width > 140 || rect.height > 100) break;
+            outer = node;
+        }
+        return outer;
+    }
+
+    function placeAnchorAtBookmark(anchor, saveBtn) {
+        anchor.style.left = '0px';
+        anchor.style.top = '0px';
+        const origin = anchor.getBoundingClientRect();
+        const saveRect = saveBtn.getBoundingClientRect();
+        anchor.style.left = (saveRect.left - origin.left) + 'px';
+        anchor.style.top = (saveRect.top + saveRect.height / 2 - origin.top) + 'px';
+    }
+
     function injectBeforeSave(saveBtn) {
         if (isBlockedPath() || /^\/reels?\//.test(location.pathname)) return;
         if (!saveBtn || !saveBtn.parentElement || inExcludedChrome(saveBtn) || saveBtn.closest('[data-igdl-story]')) return;
         const root = postRootFor(saveBtn);
         if (!root) return;
-        const previous = saveBtn.previousElementSibling;
-        if (previous && previous.classList.contains('igdl-anchor')) {
-            spaceCluster(previous, saveBtn);
+        const existing = root.querySelector('.igdl-anchor');
+        if (existing) {
+            placeAnchorAtBookmark(existing, saveBtn);
+            spaceCluster(existing, saveBtn);
             return;
         }
-        if (root.querySelector('.igdl-anchor')) return;
         const anchor = document.createElement('span');
         anchor.className = 'igdl-anchor';
-        // A zero-size block, not inline-block: an inline box in front of the
-        // bookmark still opens a line box and pushes a block-level button down.
-        anchor.style.cssText = 'position:relative;display:block;width:0;height:0;overflow:visible;margin:0;padding:0;border:0;line-height:0;font-size:0;flex:0 0 0px;pointer-events:none;';
+        // Out of flow, so a wrapping action row cannot move the bookmark.
+        anchor.style.cssText = 'position:absolute;width:0;height:0;overflow:visible;margin:0;padding:0;border:0;pointer-events:none;z-index:5;';
         const cluster = document.createElement('div');
         cluster.className = 'igdl-action-cluster';
-        cluster.style.cssText = 'position:absolute;right:0;top:50%;transform:translateY(-50%);display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;gap:0;white-space:nowrap;width:max-content;margin:0;pointer-events:auto;';
+        cluster.style.cssText = 'position:absolute;right:0;top:0;transform:translateY(-50%);display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;gap:0;white-space:nowrap;width:max-content;margin:0;pointer-events:auto;';
         const [newtabBtn, downloadBtn] = pairButtons(saveBtn, { forceSize: 24 });
         cluster.append(newtabBtn, downloadBtn);
+        stopHoverBubble(anchor);
+        stopHoverBubble(cluster);
+        stopHoverBubble(newtabBtn);
+        stopHoverBubble(downloadBtn);
         anchor.appendChild(cluster);
-        saveBtn.parentElement.insertBefore(anchor, saveBtn);
+        const outer = bookmarkOuter(saveBtn);
+        (outer.parentElement || saveBtn.parentElement).insertBefore(anchor, outer);
+        placeAnchorAtBookmark(anchor, saveBtn);
         spaceCluster(anchor, saveBtn);
         attachPrefetch([newtabBtn, downloadBtn]);
     }
@@ -574,6 +613,7 @@
     });
     uiObserver.observe(document.documentElement, { childList: true, subtree: true });
     window.addEventListener('popstate', scheduleScan);
+    window.addEventListener('scroll', scheduleScan, true);
     const pushState = history.pushState;
     const replaceState = history.replaceState;
     history.pushState = function () {
