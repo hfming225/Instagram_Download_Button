@@ -9,7 +9,7 @@
 // @name:hi             इंस्टाग्राम डाउनलोडर
 // @name:ru             Загрузчик Instagram
 // @namespace           https://github.com/hfming225/Instagram_Download_Button
-// @version             1.18.3
+// @version             1.18.4
 // @compatible          chrome
 // @description         Add the download button and the open button to download or open profile picture and media in the posts, stories, and highlights in Instagram
 // @description:zh-TW   在Instagram頁面加入下載按鈕與開啟按鈕，透過這些按鈕可以下載或開啟大頭貼與貼文、限時動態、Highlight中的照片或影片
@@ -281,48 +281,70 @@
         buttons.forEach((btn) => onMouseInHandler({ currentTarget: btn }));
     }
 
-    function isRowFlex(el) {
-        if (!el) return false;
-        const cs = getComputedStyle(el);
-        const display = cs.display;
-        if (display !== 'flex' && display !== 'inline-flex') return false;
-        return cs.flexDirection === 'row' || cs.flexDirection === 'row-reverse';
+    const overlayClusters = new WeakMap();
+
+    function findActionBarSlot(saveBtn) {
+        let node = saveBtn.parentElement;
+        for (let depth = 0; node && depth < 10; depth++, node = node.parentElement) {
+            if (node === document.body || node === document.documentElement) break;
+            const children = [...node.children].filter((el) => !el.classList || !el.classList.contains('igdl-action-cluster'));
+            const slot = children.find((el) => el === saveBtn || el.contains(saveBtn));
+            if (!slot) continue;
+            const hasSiblingActions = children.some((el) => {
+                return el !== slot && el.querySelector && el.querySelector('button svg, [role="button"] svg');
+            });
+            if (!hasSiblingActions) continue;
+            const rect = node.getBoundingClientRect();
+            if (rect.width < 180 || rect.height < 16 || rect.height > 120) continue;
+            const style = getComputedStyle(node);
+            const horizontal = (style.display === 'flex' || style.display === 'inline-flex' || style.display === 'grid')
+                && style.flexDirection !== 'column' && style.flexDirection !== 'column-reverse';
+            if (horizontal) return { row: node, slot: slot };
+        }
+        return null;
     }
 
-    function findHorizontalActionRow(saveBtn) {
-        let node = saveBtn.parentElement;
-        let fallback = null;
-        for (let depth = 0; node && depth < 8; depth++, node = node.parentElement) {
-            if (node === document.body || node === document.documentElement) break;
-            const buttons = [...node.querySelectorAll('button, [role="button"]')].filter((btn) => {
-                return btn.querySelector('svg') && !btn.closest('.custom-btn') && !btn.closest('.igdl-action-cluster');
-            });
-            const hasCount = buttons.some((btn) => /\d/.test((btn.innerText || '').trim()));
-            if (hasCount && buttons.length >= 3) {
-                if (isRowFlex(node)) return node;
-                fallback = fallback || node;
-            }
+    function makeActionCluster(saveBtn) {
+        const cluster = document.createElement('div');
+        cluster.className = 'igdl-action-cluster';
+        cluster.style.cssText = 'display:inline-flex;flex-direction:row;flex-wrap:nowrap;align-items:center;flex:0 0 auto;align-self:center;width:max-content;max-width:none;margin:0 0 0 auto;';
+        const [newtabBtn, downloadBtn] = pairButtons(saveBtn, { forceSize: 24 });
+        cluster.append(newtabBtn, downloadBtn);
+        attachPrefetch([newtabBtn, downloadBtn]);
+        return cluster;
+    }
+
+    function placeBookmarkOverlay(saveBtn, root) {
+        let cluster = overlayClusters.get(root);
+        if (!cluster || !cluster.isConnected) {
+            cluster = makeActionCluster(saveBtn);
+            cluster.dataset.igdlOverlay = '1';
+            cluster.style.position = 'fixed';
+            cluster.style.zIndex = '5';
+            cluster.style.margin = '0';
+            document.body.appendChild(cluster);
+            overlayClusters.set(root, cluster);
         }
-        return fallback || saveBtn.parentElement;
+        const rect = saveBtn.getBoundingClientRect();
+        const width = cluster.offsetWidth || 88;
+        const height = cluster.offsetHeight || 40;
+        cluster.style.left = Math.max(0, rect.left - width) + 'px';
+        cluster.style.top = (rect.top + (rect.height - height) / 2) + 'px';
     }
 
     function injectBeforeSave(saveBtn) {
         if (isBlockedPath() || /^\/reels?\//.test(location.pathname)) return;
         if (!saveBtn || saveBtn.closest('.igdl-action-cluster, [data-igdl-story]') || inExcludedChrome(saveBtn)) return;
         const root = postRootFor(saveBtn);
-        if (!root || root.querySelector('.igdl-action-cluster')) return;
-        const row = findHorizontalActionRow(saveBtn);
-        if (!row || !saveBtn.parentElement) return;
-        let slot = saveBtn;
-        while (slot.parentElement && slot.parentElement !== row) slot = slot.parentElement;
-        const cluster = document.createElement('div');
-        cluster.className = 'igdl-action-cluster';
-        cluster.style.cssText = 'display:inline-flex;flex-flow:row nowrap;align-items:center;justify-content:flex-end;width:max-content;max-width:none;flex:0 0 auto;align-self:center;margin:0 0 0 auto;';
-        // Sibling only. The bookmark stays where React put it.
-        slot.parentElement.insertBefore(cluster, slot);
-        const [newtabBtn, downloadBtn] = pairButtons(saveBtn, { forceSize: 24 });
-        cluster.append(newtabBtn, downloadBtn);
-        attachPrefetch([newtabBtn, downloadBtn]);
+        if (!root) return;
+        const placed = findActionBarSlot(saveBtn);
+        if (placed) {
+            if (root.querySelector('.igdl-action-cluster') || (overlayClusters.get(root) && overlayClusters.get(root).isConnected)) return;
+            const cluster = makeActionCluster(saveBtn);
+            placed.row.insertBefore(cluster, placed.slot);
+            return;
+        }
+        placeBookmarkOverlay(saveBtn, root);
     }
 
     function findReelColumns() {
