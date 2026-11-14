@@ -1,3 +1,13 @@
+# Instagram 下載器修復說明（1.18.2）
+
+## 1.18.2 首頁貼文照片下載失敗
+
+根因：首頁輪播貼文（網址仍是 `/`，短碼在貼文裡的 `/p/` 連結）仍走舊的輪播索引。圓點 class `div._acnb` 已經不在了，程式直接丟出 `Cannot find the media index`，`postOnClicked` 把例外吃掉，所以按鈕沒有反應、也不會下載。就算沒進輪播分支，圖片選擇器還在找巢狀的 `article article ... img`，媒體 id 則去抓貼文 HTML 裡已經常常不存在的 `media_id`，API 還打會被 CORS 擋下的 `i.instagram.com`。CDN 圖片也不能靠 `<a download>` 存檔。
+
+這版改為：從貼文裡的 `/p/` 或 `/reel/` 連結取出 shortcode，在本機換成 media id，再打 `www.instagram.com/api/v1/media/<id>/info/`。輪播用目前看得到的那張（`li` 或圓點顏色），`carousel_media` 取最寬的 `image_versions2` 或 `video_versions`。API 失敗時改抓可見 `<img>` 的 srcset 最大一張。檔案用 `GM_xmlhttpRequest` 取 blob 再存。失敗時 `console.debug` 會以 `[IGDL]` 開頭，按鈕會短暫紅框。
+
+下面是先前版本的說明。
+
 # Instagram 下載器修復說明（1.18.1）
 
 ## 1.18.1（同一支 PR，依已登入 Edge 的截圖再修）

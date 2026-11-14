@@ -9,7 +9,7 @@
 // @name:hi             इंस्टाग्राम डाउनलोडर
 // @name:ru             Загрузчик Instagram
 // @namespace           https://github.com/hfming225/Instagram_Download_Button
-// @version             1.18.1
+// @version             1.18.2
 // @compatible          chrome
 // @description         Add the download button and the open button to download or open profile picture and media in the posts, stories, and highlights in Instagram
 // @description:zh-TW   在Instagram頁面加入下載按鈕與開啟按鈕，透過這些按鈕可以下載或開啟大頭貼與貼文、限時動態、Highlight中的照片或影片
@@ -80,6 +80,25 @@
     const postUrlPattern = /instagram\.com\/p\/[\w-]+\//;
 
     const WEB_APP_ID = '936619743392459';
+
+    function igdlLog() {
+        const args = ['[IGDL]'];
+        for (let i = 0; i < arguments.length; i++) args.push(arguments[i]);
+        console.debug.apply(console, args);
+    }
+
+    function flashError(button, message) {
+        if (!button || !button.style) return;
+        const previousTitle = button.getAttribute('title');
+        button.setAttribute('title', message || 'Download failed');
+        button.style.outline = '2px solid #ed4956';
+        button.style.outlineOffset = '2px';
+        setTimeout(() => {
+            button.style.outline = '';
+            button.style.outlineOffset = '';
+            if (previousTitle) button.setAttribute('title', previousTitle);
+        }, 1600);
+    }
     const SAVE_ICON_SELECTORS = [
         'polygon[points="20 21 12 13.44 4 21 4 3 20 3 20 21"]',
         'path[d="M20 22a.999.999 0 0 1-.687-.273L12 14.815l-7.313 6.912A1 1 0 0 1 3 21V3a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1Z"]'
@@ -584,105 +603,184 @@
 
     async function postOnClicked(target) {
         try {
-            // extract url from target post and download or open it
-            let articleNode = postGetArticleNode(target);
-            let { url, mediaIndex } = await postGetUrl(target, articleNode);
-
-            // download or open media url
-            if (url.length > 0) {
-                // check url
-                if (target.getAttribute('class').includes('download-btn')) {
-                    let mediaName = url
-                        .split('?')[0]
-                        .split('\\')
-                        .pop()
-                        .split('/')
-                        .pop();
-                    mediaName = mediaName.substring(0, mediaName.lastIndexOf('.'));
-                    let datetime = new Date(articleNode.querySelector('time').getAttribute('datetime'));
-                    let posterName = articleNode.querySelector('header a') || findPostName(articleNode);
-                    posterName = posterName.getAttribute('href').replace(/\//g, '');
-                    let postId = findPostId(articleNode);
-                    let filename = filenameFormat(postFilenameTemplate, posterName, datetime, mediaName, postId, mediaIndex);
-                    downloadResource(url, filename);
-                } else {
-                    // open url in new tab
-                    openResource(url);
+            igdlLog('post click', location.pathname);
+            const articleNode = postGetArticleNode(target);
+            const resolved = await postGetUrl(target, articleNode);
+            const url = resolved && resolved.url;
+            const mediaIndex = resolved ? resolved.mediaIndex : 0;
+            igdlLog('post resolved', { mediaIndex: mediaIndex, url: url });
+            if (!url) {
+                flashError(target, 'Download failed');
+                return;
+            }
+            if (target.getAttribute('class').includes('download-btn')) {
+                let mediaName = url.split('?')[0].split('\\').pop().split('/').pop();
+                const dot = mediaName.lastIndexOf('.');
+                if (dot > 0) mediaName = mediaName.substring(0, dot);
+                const timeEl = articleNode.querySelector && articleNode.querySelector('time');
+                const datetime = timeEl && timeEl.getAttribute('datetime') ? new Date(timeEl.getAttribute('datetime')) : new Date();
+                let posterName = 'instagram';
+                const nameLinks = articleNode.querySelectorAll ? articleNode.querySelectorAll('a[href]') : [];
+                for (let i = 0; i < nameLinks.length; i++) {
+                    const href = nameLinks[i].getAttribute('href') || '';
+                    const user = href.match(/^\/([A-Za-z0-9._]+)\/?$/);
+                    if (user && !/^(p|reel|reels|explore|stories)$/.test(user[1])) {
+                        posterName = user[1];
+                        break;
+                    }
                 }
+                const postId = findPostId(articleNode) || 'post';
+                const filename = filenameFormat(postFilenameTemplate, posterName, datetime, mediaName, postId, mediaIndex);
+                downloadResource(url, filename, target);
+            } else {
+                openResource(url);
             }
         } catch (e) {
-            console.log(`Uncatched in postOnClicked(): ${e}\n${e.stack}`);
+            igdlLog('post click failed', e && e.message ? e.message : e);
+            flashError(target, 'Download failed');
             return null;
         }
     }
 
     function postGetArticleNode(target) {
+        if (target && target.closest) {
+            const article = target.closest('article');
+            if (article) return article;
+            const dialog = target.closest('[role="dialog"]');
+            if (dialog) return dialog;
+        }
         let articleNode = target;
         while (articleNode && articleNode.tagName !== 'ARTICLE' && articleNode.tagName !== 'MAIN') {
             articleNode = articleNode.parentNode;
         }
-        return articleNode;
+        return articleNode || document.body;
     }
 
-    async function postGetUrl(target, articleNode) {
-        // meta[property="og:video"]
-        let list = articleNode.querySelectorAll('li[style][class]');
-        let url = null;
-        let mediaIndex = 0;
-        if (list.length === 0) {
-            // single img or video
-            if (!disableNewUrlFetchMethod) url = await getUrlFromInfoApi(articleNode);
-            if (url === null) {
-                let videoElem = articleNode.querySelector('video');
-                if (videoElem) {
-                    // media type is video
-                    url = videoElem.getAttribute('src');
-                    if (videoElem.hasAttribute('videoURL')) {
-                        url = videoElem.getAttribute('videoURL');
-                    } else if (url === null || url.includes('blob')) {
-                        url = await fetchVideoURL(articleNode, videoElem);
-                    }
-                } else if (articleNode.querySelector('article  div[role] div > img')) {
-                    // media type is image
-                    url = articleNode.querySelector('article  div[role] div > img').getAttribute('src');
-                } else {
-                    console.log('Err: not find media at handle post single');
-                }
+    function largestFromImg(img) {
+        if (!img) return '';
+        const srcset = img.getAttribute('srcset') || '';
+        let bestUrl = '';
+        let bestW = -1;
+        srcset.split(',').forEach((part) => {
+            const bits = part.trim().split(/\s+/);
+            if (!bits[0]) return;
+            const width = parseInt(String(bits[1] || '').replace(/w$/i, ''), 10);
+            const score = isNaN(width) ? 0 : width;
+            if (score >= bestW) {
+                bestW = score;
+                bestUrl = bits[0];
             }
-        } else {
-            // multiple imgs or videos
-            const postView = location.pathname.startsWith('/p/');
-            let dotsElements = [...articleNode.querySelectorAll(`div._acnb`)];
-            mediaIndex = [...dotsElements].reduce((result, element, index) => (element.classList.length === 2 ? index : result), null);
-            if (mediaIndex === null) throw 'Cannot find the media index';
+        });
+        if (bestUrl) return bestUrl;
+        return img.currentSrc || img.getAttribute('src') || '';
+    }
 
-            if (!disableNewUrlFetchMethod) url = await getUrlFromInfoApi(articleNode, mediaIndex);
-            if (url === null) {
-                const listElements = [...articleNode.querySelectorAll(`:scope > div > div:nth-child(${postView ? 1 : 2}) > div > div:nth-child(1) ul li[style*="translateX"]`)];
-                const listElementWidth = Math.max(...listElements.map(element => element.clientWidth));
+    function visiblePostMedia(root) {
+        if (!root || !root.querySelectorAll) return null;
+        const bounds = root.getBoundingClientRect();
+        let best = null;
+        let bestArea = 0;
+        root.querySelectorAll('img, video').forEach((node) => {
+            if (node.closest && node.closest('header')) return;
+            const rect = node.getBoundingClientRect();
+            if (rect.width < 120 || rect.height < 120) return;
+            const left = Math.max(rect.left, bounds.left);
+            const right = Math.min(rect.right, bounds.right);
+            const top = Math.max(rect.top, bounds.top);
+            const bottom = Math.min(rect.bottom, bounds.bottom);
+            const area = Math.max(0, right - left) * Math.max(0, bottom - top);
+            if (area > bestArea) {
+                best = node;
+                bestArea = area;
+            }
+        });
+        return best;
+    }
 
-                const positionsMap = listElements.reduce((result, element) => {
-                    const position = Math.round(Number(element.style.transform.match(/-?(\d+)/)[1]) / listElementWidth);
-                    return { ...result, [position]: element };
-                }, {});
+    function colorScore(cssColor) {
+        const match = String(cssColor || '').match(/rgba?\(([^)]+)\)/);
+        if (!match) return 0;
+        const parts = match[1].split(',').map((part) => parseFloat(part));
+        const r = parts[0] || 0;
+        const g = parts[1] || 0;
+        const b = parts[2] || 0;
+        const a = parts.length > 3 ? parts[3] : 1;
+        if (!a) return 0;
+        return a * (Math.abs(r - g) + Math.abs(g - b) + Math.abs(b - r) + 1);
+    }
 
-                const node = positionsMap[mediaIndex];
-                if (node.querySelector('video')) {
-                    // media type is video
-                    let videoElem = node.querySelector('video');
-                    url = videoElem.getAttribute('src');
-                    if (videoElem.hasAttribute('videoURL')) {
-                        url = videoElem.getAttribute('videoURL');
-                    } else if (url === null || url.includes('blob')) {
-                        url = await fetchVideoURL(articleNode, videoElem);
+    function dotIndex(articleNode) {
+        const legacy = [...articleNode.querySelectorAll('div._acnb')];
+        if (legacy.length > 1) {
+            const active = legacy.findIndex((el) => el.classList.length === 2 || el.getAttribute('aria-current') === 'true');
+            igdlLog('carousel dots legacy', legacy.length, 'active', active);
+            return active >= 0 ? active : 0;
+        }
+        const divs = articleNode.querySelectorAll('div');
+        for (let i = 0; i < divs.length; i++) {
+            const kids = [...divs[i].children].filter((kid) => kid.tagName === 'DIV');
+            if (kids.length < 2 || kids.length > 20) continue;
+            const rects = kids.map((kid) => kid.getBoundingClientRect());
+            if (rects.some((rect) => rect.width < 4 || rect.width > 14 || Math.abs(rect.width - rect.height) > 3)) continue;
+            let active = kids.findIndex((kid) => kid.getAttribute('aria-selected') === 'true' || kid.getAttribute('aria-current') === 'true');
+            if (active < 0) {
+                let best = 0;
+                let bestScore = -1;
+                kids.forEach((kid, index) => {
+                    const score = colorScore(getComputedStyle(kid).backgroundColor);
+                    if (score > bestScore) {
+                        bestScore = score;
+                        best = index;
                     }
-                } else if (node.querySelector('img')) {
-                    // media type is image
-                    url = node.querySelector('img').getAttribute('src');
+                });
+                active = best;
+            }
+            igdlLog('carousel dots', kids.length, 'active', active);
+            return active;
+        }
+        return null;
+    }
+
+    function carouselIndex(articleNode, mediaEl) {
+        const slide = mediaEl && mediaEl.closest && mediaEl.closest('li');
+        if (slide && slide.parentElement) {
+            const slides = [...slide.parentElement.children].filter((node) => node.tagName === 'LI');
+            if (slides.length > 1) {
+                const index = slides.indexOf(slide);
+                if (index >= 0) {
+                    igdlLog('carousel index from visible slide', index, 'of', slides.length);
+                    return index;
                 }
             }
         }
-        return { url, mediaIndex };
+        const fromDots = articleNode ? dotIndex(articleNode) : null;
+        if (fromDots != null) return fromDots;
+        igdlLog('carousel index default 0');
+        return 0;
+    }
+
+    async function postGetUrl(target, articleNode) {
+        const media = visiblePostMedia(articleNode);
+        const mediaIndex = carouselIndex(articleNode, media);
+        const shortcode = findPostId(articleNode);
+        igdlLog('post media', media && media.tagName, 'index', mediaIndex, 'shortcode', shortcode);
+        let url = null;
+        if (!disableNewUrlFetchMethod) url = await getUrlFromInfoApi(articleNode, mediaIndex);
+        if (!url && media) {
+            if (media.tagName === 'VIDEO') {
+                url = media.getAttribute('videoURL') || '';
+                const src = media.currentSrc || media.getAttribute('src') || '';
+                if (!url && src && !src.startsWith('blob:')) url = src;
+                if (!url || String(url).startsWith('blob:')) {
+                    try { url = await fetchVideoURL(articleNode, media); } catch (err) { igdlLog('video fallback failed', err && err.message); }
+                }
+            } else {
+                url = largestFromImg(media);
+            }
+            igdlLog('dom media url', url);
+        }
+        if (url && String(url).startsWith('blob:')) url = null;
+        return { url: url, mediaIndex: mediaIndex };
     }
 
     function findHighlightsIndex() {
@@ -774,7 +872,14 @@
                     return null;
                 }
 
-                return method1() || await method3() || method2();
+                function shortcodeId() {
+                    const code = findPostId(articleNode);
+                    const id = code ? shortcodeToMediaId(code) : null;
+                    if (code) igdlLog('shortcode', code, 'media id', id);
+                    return id;
+                }
+
+                return method1() || shortcodeId() || await method3() || method2();
             }
 
             function getImgOrVedioUrl(item) {
@@ -785,42 +890,29 @@
                 }
             }
 
-            let appId = findAppId();
-            if (!appId) return null;
-            let headers = {
-                method: 'GET',
-                headers: {
-                    Accept: '*/*',
-                    'X-IG-App-ID': appId
-                },
-                credentials: 'include',
-                mode: 'cors'
-            };
-
             let mediaId = await findMediaId(mediaIdx);
             if (!mediaId) {
-                console.log("Cannot find media id");
+                igdlLog('no media id');
                 return null;
             }
             if (!(mediaId in infoCache)) {
-                let url = 'https://i.instagram.com/api/v1/media/' + mediaId + '/info/';
-                let resp = await pageFetch(url, headers);
-                if (resp.status !== 200) {
-                    console.log(`Fetch info API failed with status code: ${resp.status}`);
-                    console.log(`context: ${JSON.stringify(await resp.json(), space=2)}`);
+                const infoUrl = 'https://www.instagram.com/api/v1/media/' + mediaId + '/info/';
+                igdlLog('info api', infoUrl);
+                const respJson = await igFetchJson(infoUrl);
+                if (!respJson || !respJson.items || !respJson.items[0]) {
+                    igdlLog('info api empty', respJson && respJson.status);
                     return null;
                 }
-                let respJson = await resp.json();
                 infoCache[mediaId] = respJson;
             }
             let infoJson = infoCache[mediaId];
-            if ('carousel_media' in infoJson.items[0]) {
-                // multi-media post
-                return getImgOrVedioUrl(infoJson.items[0].carousel_media[mediaIdx]);
-            } else {
-                // single media post
-                return getImgOrVedioUrl(infoJson.items[0]);
+            const item = infoJson.items[0];
+            if (item.carousel_media && item.carousel_media.length) {
+                const index = Math.min(Math.max(mediaIdx || 0, 0), item.carousel_media.length - 1);
+                igdlLog('carousel api', index, 'of', item.carousel_media.length);
+                return bestItemUrl(item.carousel_media[index]);
             }
+            return bestItemUrl(item);
         } catch (e) {
             console.log(`Uncatched in getUrlFromInfoApi(): ${e}\n${e.stack}`);
             return null;
@@ -855,14 +947,28 @@
         }
     }
 
+    function shortcodeToMediaId(code) {
+        const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+        let id = 0n;
+        for (let i = 0; i < code.length; i++) {
+            const digit = alphabet.indexOf(code.charAt(i));
+            if (digit < 0) return null;
+            id = id * 64n + BigInt(digit);
+        }
+        return id.toString();
+    }
+
     function findPostId(articleNode) {
-        let aNodes = articleNode.querySelectorAll('a');
-        for (let i = 0; i < aNodes.length; ++i) {
-            let link = aNodes[i].getAttribute('href');
-            if (link) {
-                let match = link.match(postIdPattern);
-                if (match) return match[1];
-            }
+        const scope = articleNode && articleNode.querySelectorAll ? articleNode : document;
+        const anchors = scope.querySelectorAll('a[href]');
+        for (let i = 0; i < anchors.length; i++) {
+            const link = anchors[i].getAttribute('href') || '';
+            const match = link.match(/\/(?:p|reel)\/([A-Za-z0-9_-]+)/);
+            if (match) return match[1];
+        }
+        if (/^\/(?:p|reel)\//.test(location.pathname)) {
+            const page = location.pathname.match(/\/(?:p|reel)\/([A-Za-z0-9_-]+)/);
+            if (page) return page[1];
         }
         return null;
     }
@@ -1211,51 +1317,57 @@
     }
 
     // Current blob size limit is around 500MB for browsers
-    function downloadResource(url, filename) {
+    function downloadResource(url, filename, button) {
+        if (!url) {
+            igdlLog('download missing url');
+            flashError(button, 'Download failed');
+            return;
+        }
         if (url.startsWith('blob:')) {
             forceDownload(url, filename, 'mp4');
             return;
         }
-        console.log(`Dowloading ${url}`);
-        // ref: https://stackoverflow.com/questions/49474775/chrome-65-blocks-cross-origin-a-download-client-side-workaround-to-force-down
+        igdlLog('download', filename, url);
         if (!filename) {
-            filename = url
-                .split('\\')
-                .pop()
-                .split('/')
-                .pop();
+            filename = url.split('\\').pop().split('/').pop();
         }
         const saveBlob = (blob) => {
-            const extension = (blob.type || 'application/octet-stream').split('/').pop();
+            let extension = (blob.type || '').split('/').pop();
+            if (!extension || extension === 'octet-stream') {
+                const fromUrl = (url.split('?')[0].split('.').pop() || 'jpg').toLowerCase();
+                extension = fromUrl.length <= 5 ? fromUrl : 'jpg';
+            }
             const blobUrl = window.URL.createObjectURL(blob);
             forceDownload(blobUrl, filename, extension);
+            igdlLog('saved', filename + '.' + extension, blob.type, blob.size);
         };
-        pageFetch(url, {
-            headers: new Headers({
-                Origin: location.origin,
-            }),
-            mode: 'cors',
-        })
-            .then(response => {
+        const fail = (err) => {
+            igdlLog('download failed', err && err.message ? err.message : err);
+            flashError(button, 'Download failed');
+        };
+        const viaPage = () => pageFetch(url, { mode: 'cors' })
+            .then((response) => {
                 if (!response.ok) throw new Error('HTTP ' + response.status);
                 return response.blob();
             })
             .then(saveBlob)
-            .catch(e => {
-                if (typeof GM_xmlhttpRequest !== 'function') {
-                    console.error(e);
-                    return;
-                }
-                GM_xmlhttpRequest({
-                    method: 'GET',
-                    url: url,
-                    responseType: 'blob',
-                    onload: (r) => {
-                        if (r.status >= 200 && r.status < 300 && r.response) saveBlob(r.response);
-                        else console.error('GM download failed', r.status, e);
-                    },
-                    onerror: (err) => console.error(err || e)
-                });
+            .catch(fail);
+        // CDN images are cross-origin. A plain <a download> is ignored, and page fetch
+        // is often blocked by CORS, so the extension request is the one that saves the file.
+        if (typeof GM_xmlhttpRequest === 'function') {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: url,
+                responseType: 'blob',
+                onload: (r) => {
+                    igdlLog('GM response', r.status, r.response && r.response.type, r.response && r.response.size);
+                    if (r.status >= 200 && r.status < 300 && r.response) saveBlob(r.response);
+                    else viaPage();
+                },
+                onerror: () => viaPage()
             });
+            return;
+        }
+        viaPage();
     }
 })();
