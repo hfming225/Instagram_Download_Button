@@ -9,7 +9,7 @@
 // @name:hi             इंस्टाग्राम डाउनलोडर
 // @name:ru             Загрузчик Instagram
 // @namespace           https://github.com/hfming225/Instagram_Download_Button
-// @version             1.18.4
+// @version             1.18.5
 // @compatible          chrome
 // @description         Add the download button and the open button to download or open profile picture and media in the posts, stories, and highlights in Instagram
 // @description:zh-TW   在Instagram頁面加入下載按鈕與開啟按鈕，透過這些按鈕可以下載或開啟大頭貼與貼文、限時動態、Highlight中的照片或影片
@@ -281,70 +281,41 @@
         buttons.forEach((btn) => onMouseInHandler({ currentTarget: btn }));
     }
 
-    const overlayClusters = new WeakMap();
-
-    function findActionBarSlot(saveBtn) {
-        let node = saveBtn.parentElement;
-        for (let depth = 0; node && depth < 10; depth++, node = node.parentElement) {
-            if (node === document.body || node === document.documentElement) break;
-            const children = [...node.children].filter((el) => !el.classList || !el.classList.contains('igdl-action-cluster'));
-            const slot = children.find((el) => el === saveBtn || el.contains(saveBtn));
-            if (!slot) continue;
-            const hasSiblingActions = children.some((el) => {
-                return el !== slot && el.querySelector && el.querySelector('button svg, [role="button"] svg');
-            });
-            if (!hasSiblingActions) continue;
-            const rect = node.getBoundingClientRect();
-            if (rect.width < 180 || rect.height < 16 || rect.height > 120) continue;
-            const style = getComputedStyle(node);
-            const horizontal = (style.display === 'flex' || style.display === 'inline-flex' || style.display === 'grid')
-                && style.flexDirection !== 'column' && style.flexDirection !== 'column-reverse';
-            if (horizontal) return { row: node, slot: slot };
-        }
-        return null;
-    }
-
-    function makeActionCluster(saveBtn) {
-        const cluster = document.createElement('div');
-        cluster.className = 'igdl-action-cluster';
-        cluster.style.cssText = 'display:inline-flex;flex-direction:row;flex-wrap:nowrap;align-items:center;flex:0 0 auto;align-self:center;width:max-content;max-width:none;margin:0 0 0 auto;';
-        const [newtabBtn, downloadBtn] = pairButtons(saveBtn, { forceSize: 24 });
-        cluster.append(newtabBtn, downloadBtn);
-        attachPrefetch([newtabBtn, downloadBtn]);
-        return cluster;
-    }
-
-    function placeBookmarkOverlay(saveBtn, root) {
-        let cluster = overlayClusters.get(root);
-        if (!cluster || !cluster.isConnected) {
-            cluster = makeActionCluster(saveBtn);
-            cluster.dataset.igdlOverlay = '1';
-            cluster.style.position = 'fixed';
-            cluster.style.zIndex = '5';
-            cluster.style.margin = '0';
-            document.body.appendChild(cluster);
-            overlayClusters.set(root, cluster);
-        }
-        const rect = saveBtn.getBoundingClientRect();
-        const width = cluster.offsetWidth || 88;
-        const height = cluster.offsetHeight || 40;
-        cluster.style.left = Math.max(0, rect.left - width) + 'px';
-        cluster.style.top = (rect.top + (rect.height - height) / 2) + 'px';
+    function alignClusterToBookmark(anchor, saveBtn) {
+        const cluster = anchor.querySelector('.igdl-action-cluster');
+        if (!cluster) return;
+        const saveRect = saveBtn.getBoundingClientRect();
+        const anchorRect = anchor.getBoundingClientRect();
+        const center = saveRect.top + saveRect.height / 2;
+        cluster.style.top = (center - anchorRect.top) + 'px';
+        cluster.style.transform = 'translateY(-50%)';
     }
 
     function injectBeforeSave(saveBtn) {
         if (isBlockedPath() || /^\/reels?\//.test(location.pathname)) return;
-        if (!saveBtn || saveBtn.closest('.igdl-action-cluster, [data-igdl-story]') || inExcludedChrome(saveBtn)) return;
+        if (!saveBtn || !saveBtn.parentElement || inExcludedChrome(saveBtn) || saveBtn.closest('[data-igdl-story]')) return;
         const root = postRootFor(saveBtn);
         if (!root) return;
-        const placed = findActionBarSlot(saveBtn);
-        if (placed) {
-            if (root.querySelector('.igdl-action-cluster') || (overlayClusters.get(root) && overlayClusters.get(root).isConnected)) return;
-            const cluster = makeActionCluster(saveBtn);
-            placed.row.insertBefore(cluster, placed.slot);
+        const previous = saveBtn.previousElementSibling;
+        if (previous && previous.classList.contains('igdl-anchor')) {
+            alignClusterToBookmark(previous, saveBtn);
             return;
         }
-        placeBookmarkOverlay(saveBtn, root);
+        if (root.querySelector('.igdl-anchor')) return;
+        const anchor = document.createElement('span');
+        anchor.className = 'igdl-anchor';
+        // A zero-size block, not inline-block: an inline box in front of the
+        // bookmark still opens a line box and pushes a block-level button down.
+        anchor.style.cssText = 'position:relative;display:block;width:0;height:0;overflow:visible;margin:0;padding:0;border:0;line-height:0;font-size:0;flex:0 0 0px;pointer-events:none;';
+        const cluster = document.createElement('div');
+        cluster.className = 'igdl-action-cluster';
+        cluster.style.cssText = 'position:absolute;right:8px;top:50%;transform:translateY(-50%);display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;gap:16px;white-space:nowrap;width:max-content;margin:0;pointer-events:auto;';
+        const [newtabBtn, downloadBtn] = pairButtons(saveBtn, { forceSize: 24 });
+        cluster.append(newtabBtn, downloadBtn);
+        anchor.appendChild(cluster);
+        saveBtn.parentElement.insertBefore(anchor, saveBtn);
+        alignClusterToBookmark(anchor, saveBtn);
+        attachPrefetch([newtabBtn, downloadBtn]);
     }
 
     function findReelColumns() {
@@ -471,7 +442,7 @@
 
     let storyMisses = 0;
     function clearInjected() {
-        document.querySelectorAll('.custom-btn, .igdl-story-fallback, .igdl-story-tools, .igdl-action-cluster').forEach((node) => node.remove());
+        document.querySelectorAll('.custom-btn, .igdl-story-fallback, .igdl-story-tools, .igdl-action-cluster, .igdl-anchor').forEach((node) => node.remove());
         document.querySelectorAll('[data-igdl-story]').forEach((node) => node.removeAttribute('data-igdl-story'));
     }
 
@@ -479,7 +450,7 @@
         if (!document.body) return;
         const curUrl = location.href;
         if (isBlockedPath()) {
-            if (document.querySelector('.custom-btn, .igdl-action-cluster, .igdl-story-tools, .igdl-story-fallback')) clearInjected();
+            if (document.querySelector('.custom-btn, .igdl-action-cluster, .igdl-anchor, .igdl-story-tools, .igdl-story-fallback')) clearInjected();
             preUrl = curUrl;
             return;
         }
