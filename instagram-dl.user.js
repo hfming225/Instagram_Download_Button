@@ -9,7 +9,7 @@
 // @name:hi             इंस्टाग्राम डाउनलोडर
 // @name:ru             Загрузчик Instagram
 // @namespace           https://github.com/hfming225/Instagram_Download_Button
-// @version             1.18.5
+// @version             1.18.6
 // @compatible          chrome
 // @description         Add the download button and the open button to download or open profile picture and media in the posts, stories, and highlights in Instagram
 // @description:zh-TW   在Instagram頁面加入下載按鈕與開啟按鈕，透過這些按鈕可以下載或開啟大頭貼與貼文、限時動態、Highlight中的照片或影片
@@ -281,10 +281,76 @@
         buttons.forEach((btn) => onMouseInHandler({ currentTarget: btn }));
     }
 
-    function alignClusterToBookmark(anchor, saveBtn) {
+    function glyphBox(svg) {
+        const rect = svg.getBoundingClientRect();
+        let box = null;
+        try { box = svg.getBBox(); } catch (err) { box = null; }
+        if (!box || !(box.width > 0)) {
+            return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+        }
+        const vb = svg.viewBox && svg.viewBox.baseVal;
+        const vbW = vb && vb.width ? vb.width : rect.width;
+        const vbH = vb && vb.height ? vb.height : rect.height;
+        const scaleX = vbW ? rect.width / vbW : 1;
+        const scaleY = vbH ? rect.height / vbH : 1;
+        return {
+            left: rect.left + box.x * scaleX,
+            right: rect.left + (box.x + box.width) * scaleX,
+            top: rect.top + box.y * scaleY,
+            bottom: rect.top + (box.y + box.height) * scaleY
+        };
+    }
+
+    function desiredGlyphGap(saveBtn) {
+        const root = (saveBtn.closest && (saveBtn.closest('article') || saveBtn.closest('[role="dialog"]'))) || document.body;
+        const buttons = [...root.querySelectorAll('button, [role="button"]')].filter((btn) => {
+            return btn !== saveBtn && !btn.closest('.igdl-anchor, .custom-btn');
+        });
+        const boxes = [];
+        buttons.forEach((btn) => {
+            const svg = btn.querySelector('svg');
+            if (!svg) return;
+            const box = glyphBox(svg);
+            if (box.right - box.left < 10) return;
+            boxes.push(box);
+        });
+        boxes.sort((a, b) => a.left - b.left);
+        const gaps = [];
+        for (let i = 1; i < boxes.length; i++) {
+            const midA = (boxes[i - 1].top + boxes[i - 1].bottom) / 2;
+            const midB = (boxes[i].top + boxes[i].bottom) / 2;
+            if (Math.abs(midA - midB) > 10) continue;
+            const gap = boxes[i].left - boxes[i - 1].right;
+            if (gap >= 8 && gap <= 28) gaps.push(gap);
+        }
+        if (!gaps.length) return 16;
+        gaps.sort((a, b) => a - b);
+        return gaps[Math.floor((gaps.length - 1) / 2)];
+    }
+
+    function spaceCluster(anchor, saveBtn) {
         const cluster = anchor.querySelector('.igdl-action-cluster');
         if (!cluster) return;
+        const openBtn = cluster.querySelector('.newtab-btn');
+        const downloadBtn = cluster.querySelector('.download-btn');
+        const openSvg = openBtn && openBtn.querySelector('svg');
+        const downloadSvg = downloadBtn && downloadBtn.querySelector('svg');
+        const saveSvg = saveBtn.querySelector('svg');
+        if (!openBtn || !downloadBtn || !openSvg || !downloadSvg) return;
+        const openInk = glyphBox(openSvg);
+        const downloadInk = glyphBox(downloadSvg);
+        const openRect = openBtn.getBoundingClientRect();
+        const downloadRect = downloadBtn.getBoundingClientRect();
         const saveRect = saveBtn.getBoundingClientRect();
+        const saveInk = saveSvg ? glyphBox(saveSvg) : { left: saveRect.left + 8 };
+        const openRightInset = openRect.right - openInk.right;
+        const downloadLeftInset = downloadInk.left - downloadRect.left;
+        const downloadRightInset = downloadRect.right - downloadInk.right;
+        const saveLeftInset = saveInk.left - saveRect.left;
+        const minimum = Math.max(openRightInset + downloadLeftInset, downloadRightInset + saveLeftInset);
+        const glyphGap = Math.max(desiredGlyphGap(saveBtn), minimum);
+        cluster.style.gap = (glyphGap - openRightInset - downloadLeftInset) + 'px';
+        cluster.style.right = (glyphGap - saveLeftInset - downloadRightInset) + 'px';
         const anchorRect = anchor.getBoundingClientRect();
         const center = saveRect.top + saveRect.height / 2;
         cluster.style.top = (center - anchorRect.top) + 'px';
@@ -298,7 +364,7 @@
         if (!root) return;
         const previous = saveBtn.previousElementSibling;
         if (previous && previous.classList.contains('igdl-anchor')) {
-            alignClusterToBookmark(previous, saveBtn);
+            spaceCluster(previous, saveBtn);
             return;
         }
         if (root.querySelector('.igdl-anchor')) return;
@@ -309,12 +375,12 @@
         anchor.style.cssText = 'position:relative;display:block;width:0;height:0;overflow:visible;margin:0;padding:0;border:0;line-height:0;font-size:0;flex:0 0 0px;pointer-events:none;';
         const cluster = document.createElement('div');
         cluster.className = 'igdl-action-cluster';
-        cluster.style.cssText = 'position:absolute;right:8px;top:50%;transform:translateY(-50%);display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;gap:16px;white-space:nowrap;width:max-content;margin:0;pointer-events:auto;';
+        cluster.style.cssText = 'position:absolute;right:0;top:50%;transform:translateY(-50%);display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;gap:0;white-space:nowrap;width:max-content;margin:0;pointer-events:auto;';
         const [newtabBtn, downloadBtn] = pairButtons(saveBtn, { forceSize: 24 });
         cluster.append(newtabBtn, downloadBtn);
         anchor.appendChild(cluster);
         saveBtn.parentElement.insertBefore(anchor, saveBtn);
-        alignClusterToBookmark(anchor, saveBtn);
+        spaceCluster(anchor, saveBtn);
         attachPrefetch([newtabBtn, downloadBtn]);
     }
 
